@@ -32,6 +32,12 @@ const CommandPalette = @import("ai_command_palette.zig").CommandPalette;
 const ChatHistorySidebar = @import("ai_chat_history.zig").ChatHistorySidebar;
 const AiSettingsDialog = @import("ai_settings_dialog.zig").AiSettingsDialog;
 const KeyboardShortcutsDialog = @import("ai_keyboard_shortcuts.zig").KeyboardShortcutsDialog;
+const ExportImportDialog = @import("ai_export_import.zig").ExportImportDialog;
+const NotificationCenter = @import("ai_notification_center.zig").NotificationCenter;
+const InlineSuggestions = @import("ai_inline_suggestions.zig").InlineSuggestions;
+const ThemeCustomizationDialog = @import("ai_theme_customization.zig").ThemeCustomizationDialog;
+const SessionSharingDialog = @import("ai_session_sharing.zig").SessionSharingDialog;
+const CommandAnalysisDialog = @import("ai_command_analysis.zig").CommandAnalysisDialog;
 
 /// AI Input Mode Widget
 ///
@@ -314,6 +320,12 @@ pub const AiInputMode = extern struct {
 
         /// Chat history sidebar
         history_sidebar: ?*ChatHistorySidebar = null,
+        notification_center: ?*NotificationCenter = null,
+        export_import_dialog: ?*ExportImportDialog = null,
+        inline_suggestions: ?*InlineSuggestions = null,
+        theme_customization_dialog: ?*ThemeCustomizationDialog = null,
+        session_sharing_dialog: ?*SessionSharingDialog = null,
+        command_analysis_dialog: ?*CommandAnalysisDialog = null,
 
         /// Flag to track if object has been disposed (prevents use-after-free)
         is_disposed: bool = false,
@@ -538,6 +550,42 @@ pub const AiInputMode = extern struct {
         if (priv.history_sidebar) |sidebar| {
             sidebar.unref();
             priv.history_sidebar = null;
+        }
+
+        // Clean up notification center if created
+        if (priv.notification_center) |center| {
+            center.unref();
+            priv.notification_center = null;
+        }
+
+        // Clean up export/import dialog if created
+        if (priv.export_import_dialog) |dialog| {
+            dialog.unref();
+            priv.export_import_dialog = null;
+        }
+
+        // Clean up inline suggestions if created
+        if (priv.inline_suggestions) |suggestions| {
+            suggestions.unref();
+            priv.inline_suggestions = null;
+        }
+
+        // Clean up theme customization dialog if created
+        if (priv.theme_customization_dialog) |dialog| {
+            dialog.unref();
+            priv.theme_customization_dialog = null;
+        }
+
+        // Clean up session sharing dialog if created
+        if (priv.session_sharing_dialog) |dialog| {
+            dialog.unref();
+            priv.session_sharing_dialog = null;
+        }
+
+        // Clean up command analysis dialog if created
+        if (priv.command_analysis_dialog) |dialog| {
+            dialog.unref();
+            priv.command_analysis_dialog = null;
         }
 
         gtk.Widget.disposeTemplate(self.as(gtk.Widget), getGObjectType());
@@ -2300,6 +2348,31 @@ pub const AiInputMode = extern struct {
         _ = gio.SimpleAction.signals.activate.connect(shortcuts_action, *Self, showKeyboardShortcuts, self, .{});
         action_group.addAction(shortcuts_action);
 
+        // Export/Import action
+        const export_import_action = gio.SimpleAction.new("show-export-import", null);
+        _ = gio.SimpleAction.signals.activate.connect(export_import_action, *Self, showExportImport, self, .{});
+        action_group.addAction(export_import_action);
+
+        // Notification center action
+        const notifications_action = gio.SimpleAction.new("show-notifications", null);
+        _ = gio.SimpleAction.signals.activate.connect(notifications_action, *Self, showNotificationCenter, self, .{});
+        action_group.addAction(notifications_action);
+
+        // Theme customization action
+        const theme_action = gio.SimpleAction.new("show-theme-customization", null);
+        _ = gio.SimpleAction.signals.activate.connect(theme_action, *Self, showThemeCustomization, self, .{});
+        action_group.addAction(theme_action);
+
+        // Session sharing action
+        const session_action = gio.SimpleAction.new("show-session-sharing", null);
+        _ = gio.SimpleAction.signals.activate.connect(session_action, *Self, showSessionSharing, self, .{});
+        action_group.addAction(session_action);
+
+        // Command analysis action
+        const analysis_action = gio.SimpleAction.new("show-command-analysis", null);
+        _ = gio.SimpleAction.signals.activate.connect(analysis_action, *Self, showCommandAnalysis, self, .{});
+        action_group.addAction(analysis_action);
+
         // Insert action group
         self.as(gtk.Widget).insertActionGroup("ai", action_group.as(gio.ActionGroup));
     }
@@ -2380,6 +2453,76 @@ pub const AiInputMode = extern struct {
         if (priv.config) |cfg| {
             dialog.setConfig(cfg);
         }
+        dialog.show(win);
+    }
+
+    fn showExportImport(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const win = priv.window orelse return;
+        const dialog = priv.export_import_dialog orelse blk: {
+            const new_dialog = ExportImportDialog.new();
+            priv.export_import_dialog = new_dialog;
+            break :blk new_dialog;
+        };
+        dialog.show(win);
+    }
+
+    fn showNotificationCenter(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const win = priv.window orelse return;
+        const center = priv.notification_center orelse blk: {
+            const new_center = NotificationCenter.new();
+            priv.notification_center = new_center;
+            break :blk new_center;
+        };
+        center.show(win);
+    }
+
+    fn showThemeCustomization(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const win = priv.window orelse return;
+        const dialog = priv.theme_customization_dialog orelse blk: {
+            const new_dialog = ThemeCustomizationDialog.new();
+            priv.theme_customization_dialog = new_dialog;
+            break :blk new_dialog;
+        };
+        dialog.show(win);
+    }
+
+    fn showSessionSharing(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const win = priv.window orelse return;
+        const dialog = priv.session_sharing_dialog orelse blk: {
+            const new_dialog = SessionSharingDialog.new();
+            priv.session_sharing_dialog = new_dialog;
+            break :blk new_dialog;
+        };
+        dialog.show(win);
+    }
+
+    fn showCommandAnalysis(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const win = priv.window orelse return;
+        const dialog = priv.command_analysis_dialog orelse blk: {
+            const new_dialog = CommandAnalysisDialog.new();
+            priv.command_analysis_dialog = new_dialog;
+            break :blk new_dialog;
+        };
         dialog.show(win);
     }
 
