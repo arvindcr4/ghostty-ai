@@ -142,7 +142,7 @@ struct ThemeSuggestionView: View {
             updateTimeOfDay()
             loadThemes()
         }
-        .onChange(of: selectedActivity) { oldValue, newValue in
+        .onChange(of: selectedActivity) { _ in
             getSuggestion()
         }
         .sheet(isPresented: $showPreferences) {

@@ -54,6 +54,7 @@ pub const blueprints: []const Blueprint = &.{
     .{ .major = 1, .minor = 5, .name = "tab" },
     .{ .major = 1, .minor = 5, .name = "window" },
     .{ .major = 1, .minor = 5, .name = "command-palette" },
+    .{ .major = 1, .minor = 5, .name = "blocks" },
     .{ .major = 1, .minor = 5, .name = "ai-input-mode" },
     .{ .major = 1, .minor = 5, .name = "ai-command-search" },
 };

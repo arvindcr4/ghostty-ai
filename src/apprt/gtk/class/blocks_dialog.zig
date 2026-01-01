@@ -136,7 +136,10 @@ pub const BlocksDialog = extern struct {
             self.applyFilter();
             return;
         };
-        defer block_list.deinit(alloc);
+        defer {
+            for (block_list.items) |*block| block.deinit(alloc);
+            block_list.deinit(alloc);
+        }
 
         for (block_list.items) |block| {
             const prompt = alloc.dupeZ(u8, block.prompt) catch continue;

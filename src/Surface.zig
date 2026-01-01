@@ -2133,6 +2133,149 @@ pub fn getTerminalHistory(self: *Surface, alloc: Allocator, lines: u32) !?[]cons
     return result.toOwnedSlice() catch null;
 }
 
+/// A terminal block derived from semantic prompt tracking (OSC 133).
+/// This requires shell integration to be active.
+pub const Block = struct {
+    index: usize,
+    prompt: []const u8,
+    command: []const u8,
+    output: []const u8,
+
+    pub fn deinit(self: *Block, alloc: Allocator) void {
+        alloc.free(self.prompt);
+        alloc.free(self.command);
+        alloc.free(self.output);
+        self.* = undefined;
+    }
+};
+
+/// Returns terminal blocks (prompt/command/output) as strings.
+/// Returns an empty list if semantic prompts aren't available.
+pub fn getBlocks(self: *Surface, alloc: Allocator) !std.ArrayListUnmanaged(Block) {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+
+    const active_terminal = &self.io.terminal.screens.active;
+
+    const br_pin = active_terminal.pages.getBottomRight(.screen) orelse return .empty;
+    const tl_pin = active_terminal.pages.getTopLeft(.screen);
+
+    // Require semantic prompt information (shell integration).
+    var saw_semantic_prompt = false;
+    {
+        var it = tl_pin.rowIterator(.right_down, br_pin);
+        while (it.next()) |row_pin| {
+            if (row_pin.row.semantic_prompt != .unknown) {
+                saw_semantic_prompt = true;
+                break;
+            }
+        }
+    }
+    if (!saw_semantic_prompt) return .empty;
+
+    var blocks: std.ArrayListUnmanaged(Block) = .empty;
+    errdefer {
+        for (blocks.items) |*block| block.deinit(alloc);
+        blocks.deinit(alloc);
+    }
+
+    var prompt_buf = std.ArrayList(u8).init(alloc);
+    defer prompt_buf.deinit();
+    var command_buf = std.ArrayList(u8).init(alloc);
+    defer command_buf.deinit();
+    var output_buf = std.ArrayList(u8).init(alloc);
+    defer output_buf.deinit();
+
+    const State = enum { idle, prompt, input, output };
+    var state: State = .idle;
+    var index: usize = 0;
+
+    const helpers = struct {
+        fn appendRowText(buf: *std.ArrayList(u8), row: anytype) !void {
+            for (row.cells[0..row.size.cols]) |cell| {
+                if (cell.width > 0) {
+                    try buf.appendSlice(cell.str());
+                }
+            }
+            try buf.append('\n');
+        }
+
+        fn flush(
+            blocks_: *std.ArrayListUnmanaged(Block),
+            alloc_: Allocator,
+            index_: *usize,
+            prompt_: *std.ArrayList(u8),
+            command_: *std.ArrayList(u8),
+            output_: *std.ArrayList(u8),
+        ) !void {
+            // Ignore leading prompts with no command/output.
+            if (command_.items.len == 0 and output_.items.len == 0) {
+                prompt_.clearRetainingCapacity();
+                return;
+            }
+
+            const prompt_text = try alloc_.dupe(u8, prompt_.items);
+            errdefer alloc_.free(prompt_text);
+            const command_text = try alloc_.dupe(u8, command_.items);
+            errdefer alloc_.free(command_text);
+            const output_text = try alloc_.dupe(u8, output_.items);
+            errdefer alloc_.free(output_text);
+
+            try blocks_.append(alloc_, .{
+                .index = index_.*,
+                .prompt = prompt_text,
+                .command = command_text,
+                .output = output_text,
+            });
+            index_.* += 1;
+
+            prompt_.clearRetainingCapacity();
+            command_.clearRetainingCapacity();
+            output_.clearRetainingCapacity();
+        }
+    };
+
+    var it = tl_pin.rowIterator(.right_down, br_pin);
+    while (it.next()) |row_pin| {
+        const row = row_pin.row;
+        switch (row.semantic_prompt) {
+            .prompt, .prompt_continuation => {
+                if (state == .input or state == .output) {
+                    try helpers.flush(&blocks, alloc, &index, &prompt_buf, &command_buf, &output_buf);
+                }
+                state = .prompt;
+                try helpers.appendRowText(&prompt_buf, row);
+            },
+
+            .input => {
+                if (state == .output) {
+                    try helpers.flush(&blocks, alloc, &index, &prompt_buf, &command_buf, &output_buf);
+                }
+                state = .input;
+                try helpers.appendRowText(&command_buf, row);
+            },
+
+            .command => {
+                if (state == .idle) continue;
+                state = .output;
+                try helpers.appendRowText(&output_buf, row);
+            },
+
+            .unknown => {
+                if (state == .output) {
+                    try helpers.appendRowText(&output_buf, row);
+                }
+            },
+        }
+    }
+
+    if (state == .input or state == .output) {
+        try helpers.flush(&blocks, alloc, &index, &prompt_buf, &command_buf, &output_buf);
+    }
+
+    return blocks;
+}
+
 /// Resolves a relative file path to an absolute path using the terminal's pwd.
 fn resolvePathForOpening(
     self: *Surface,
