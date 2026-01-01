@@ -1,6 +1,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
+const ArrayList = std.ArrayList;
+const StringHashMap = std.StringHashMap;
 
 const adw = @import("adw");
 const gio = @import("gio");
@@ -25,6 +27,7 @@ const ai_client = @import("../../../ai/client.zig");
 const Binding = @import("../../../input/Binding.zig");
 const PromptSuggestionService = @import("../../../ai/main.zig").PromptSuggestionService;
 const PromptSuggestion = @import("../../../ai/main.zig").PromptSuggestion;
+const KnowledgeRulesManager = @import("../../../ai/main.zig").KnowledgeRulesManager;
 
 /// AI Input Mode Widget
 ///
@@ -172,8 +175,39 @@ pub const AiInputMode = extern struct {
         /// Template dropdown for selecting prompt templates
         template_dropdown: *gtk.DropDown,
 
+        /// Provider dropdown for selecting AI provider
+        provider_dropdown: *gtk.DropDown,
+
+        /// Model dropdown for selecting AI models
+        model_dropdown: *gtk.DropDown,
+
+        /// API key entry field
+        api_key_entry: *gtk.Entry,
+
+        /// API key visibility toggle button
+        api_key_toggle: *gtk.Button,
+
+        /// Endpoint entry field (for custom provider)
+        endpoint_entry: *gtk.Entry,
+
+        /// Endpoint row container
+        endpoint_row: *gtk.Box,
+
+        /// Menu button for additional options
+        menu_btn: *gtk.MenuButton,
+
+        /// Progress bar for long operations
+        progress_bar: ?*gtk.ProgressBar = null,
+
+        /// Flag to prevent recursive updates
+        updating_provider_dropdown: bool = false,
+        updating_api_key: bool = false,
+
         /// Agent mode toggle
         agent_toggle: *gtk.ToggleButton,
+
+        /// Voice input button
+        voice_btn: *gtk.ToggleButton,
 
         /// Text view for user input
         input_view: *gtk.TextView,
@@ -226,6 +260,9 @@ pub const AiInputMode = extern struct {
         /// Agent mode enabled
         agent_mode: bool = false,
 
+        /// Guard to prevent recursion when programmatically updating the model dropdown.
+        updating_model_dropdown: bool = false,
+
         /// Last prompt for regeneration
         last_prompt: ?[]const u8 = null,
 
@@ -255,6 +292,9 @@ pub const AiInputMode = extern struct {
 
         /// Prompt suggestion service
         prompt_suggestion_service: ?PromptSuggestionService = null,
+
+        /// Knowledge rules manager
+        knowledge_rules: ?KnowledgeRulesManager = null,
 
         /// Suggestion popup window
         suggestion_popup: ?*gtk.Popover = null,
@@ -365,6 +405,24 @@ pub const AiInputMode = extern struct {
         // Initialize prompt suggestion service
         priv.prompt_suggestion_service = PromptSuggestionService.init(alloc, 5);
 
+        // Initialize knowledge rules manager
+        priv.knowledge_rules = KnowledgeRulesManager.init(alloc) catch |err| {
+            log.warn("Failed to initialize knowledge rules manager: {}", .{err});
+            priv.knowledge_rules = null;
+        };
+
+        // Initialize provider dropdown
+        self.updateProviderDropdown();
+
+        // Initialize API key entry
+        self.updateApiKeyEntry();
+
+        // Initialize endpoint entry
+        self.updateEndpointEntry();
+
+        // Register actions for menu
+        self.registerActions();
+
         // Populate the template dropdown
         const template_names = blk: {
             var names = std.array_list.Managed([:0]const u8).init(alloc);
@@ -448,6 +506,11 @@ pub const AiInputMode = extern struct {
         if (priv.terminal_context) |ctx| alloc.free(ctx);
         priv.terminal_context = null;
 
+        if (priv.knowledge_rules) |*kr| {
+            kr.deinit();
+        }
+        priv.knowledge_rules = null;
+
         gtk.Widget.disposeTemplate(self.as(gtk.Widget), getGObjectType());
 
         gobject.Object.virtual_methods.dispose.call(Class.parent, self.as(Parent));
@@ -456,6 +519,39 @@ pub const AiInputMode = extern struct {
     fn agent_toggled(button: *gtk.ToggleButton, self: *Self) callconv(.c) void {
         const priv = getPriv(self);
         priv.agent_mode = button.getActive() != 0;
+    }
+
+    /// Signal handler for voice button toggle
+    /// Voice input requires platform-specific speech recognition APIs.
+    /// macOS uses Apple's Speech framework; GTK port shows a message explaining
+    /// this feature is macOS-only. Linux would require integrating a speech
+    /// recognition backend (e.g., Vosk, Whisper, or cloud service).
+    fn voice_toggled(button: *gtk.ToggleButton, self: *Self) callconv(.c) void {
+        _ = self;
+
+        if (button.getActive() != 0) {
+            // Voice input is macOS-only (uses Apple Speech framework)
+            // Immediately toggle off the button and show info message
+            button.setActive(0);
+
+            // Show an info message dialog with error handling
+            const info_dialog = adw.MessageDialog.new(null, "Voice Input Unavailable",
+                \\Voice input requires platform-specific speech recognition APIs.
+                \\This feature is currently available on macOS only using Apple's Speech framework.
+                \\
+                \\For Linux support, a speech recognition backend would need to be integrated.
+            );
+            info_dialog.addResponse("ok", "OK");
+            info_dialog.setDefaultResponse("ok");
+
+            // Present dialog with error handling
+            info_dialog.present() catch |err| {
+                log.err("Failed to present voice input dialog: {}", .{err});
+                // Dialog will be cleaned up by reference counting
+            };
+
+            log.info("Voice input is macOS-only; not available on Linux/GTK", .{});
+        }
     }
 
     /// Action handler for copying the selected response to clipboard
@@ -561,6 +657,36 @@ pub const AiInputMode = extern struct {
             log.err("Failed to execute command: {}", .{err});
             return;
         };
+
+        // Learn from command execution for knowledge rules
+        if (priv.knowledge_rules) |*kr| {
+            const cwd_result = std.fs.cwd().realpathAlloc(alloc, ".");
+            const cwd = cwd_result catch ".";
+            defer if (cwd_result) |c| alloc.free(c);
+
+            var command_history = ArrayList([]const u8).init(alloc);
+            defer {
+                for (command_history.items) |_| {}
+                command_history.deinit();
+            }
+
+            // Add current command to history
+            command_history.append(command) catch {};
+
+            const rule_context = KnowledgeRulesManager.RuleContext{
+                .cwd = cwd,
+                .last_command = command,
+                .command_history = command_history,
+                .last_output = null,
+                .git_state = null,
+                .env_vars = StringHashMap([]const u8).init(alloc),
+            };
+            defer rule_context.env_vars.deinit();
+
+            kr.learnFromInteraction(rule_context, command) catch |err| {
+                log.warn("Failed to learn from interaction: {}", .{err});
+            };
+        }
 
         // Close the dialog after executing
         priv.dialog.forceClose();
@@ -745,7 +871,16 @@ pub const AiInputMode = extern struct {
 
             class.bindTemplateChildPrivate("dialog", .{});
             class.bindTemplateChildPrivate("template_dropdown", .{});
+            class.bindTemplateChildPrivate("provider_dropdown", .{});
+            class.bindTemplateChildPrivate("model_dropdown", .{});
+            class.bindTemplateChildPrivate("api_key_entry", .{});
+            class.bindTemplateChildPrivate("api_key_toggle", .{});
+            class.bindTemplateChildPrivate("endpoint_entry", .{});
+            class.bindTemplateChildPrivate("endpoint_row", .{});
+            class.bindTemplateChildPrivate("menu_btn", .{});
+            class.bindTemplateChildPrivate("progress_bar", .{});
             class.bindTemplateChildPrivate("agent_toggle", .{});
+            class.bindTemplateChildPrivate("voice_btn", .{});
             class.bindTemplateChildPrivate("input_view", .{});
             class.bindTemplateChildPrivate("response_view", .{});
             class.bindTemplateChildPrivate("response_store", .{});
@@ -761,7 +896,13 @@ pub const AiInputMode = extern struct {
 
             class.bindTemplateCallback("closed", &closed);
             class.bindTemplateCallback("template_changed", &template_changed);
+            class.bindTemplateCallback("provider_changed", &providerChanged);
+            class.bindTemplateCallback("model_changed", &model_changed);
+            class.bindTemplateCallback("api_key_changed", &apiKeyChanged);
+            class.bindTemplateCallback("api_key_toggle_clicked", &apiKeyToggleClicked);
+            class.bindTemplateCallback("endpoint_changed", &endpointChanged);
             class.bindTemplateCallback("agent_toggled", &agent_toggled);
+            class.bindTemplateCallback("voice_toggled", &voice_toggled);
             class.bindTemplateCallback("send_clicked", &send_clicked);
             class.bindTemplateCallback("stop_clicked", &stop_clicked);
             class.bindTemplateCallback("regenerate_clicked", &regenerate_clicked);
@@ -893,6 +1034,10 @@ pub const AiInputMode = extern struct {
     pub fn setConfig(self: *Self, config: *Config) void {
         const priv = getPriv(self);
         priv.config = config;
+        self.updateProviderDropdown();
+        self.updateModelDropdown();
+        self.updateApiKeyEntry();
+        self.updateEndpointEntry();
         const cfg = config.get();
 
         // Initialize assistant
@@ -1063,7 +1208,67 @@ pub const AiInputMode = extern struct {
 
         // Build the final prompt
         const selection = priv.selected_text orelse "";
-        const context = priv.terminal_context orelse "";
+        var context = priv.terminal_context orelse "";
+
+        // Add knowledge rules suggestions to context
+        if (priv.knowledge_rules) |*kr| {
+            const cwd_result = std.fs.cwd().realpathAlloc(alloc, ".");
+            const cwd = cwd_result catch ".";
+            defer if (cwd_result) |c| alloc.free(c);
+
+            // Build command history
+            var command_history = ArrayList([]const u8).init(alloc);
+            defer {
+                for (command_history.items) |_| {}
+                command_history.deinit();
+            }
+
+            // Get recent commands (simplified - in real implementation, get from terminal history)
+            if (input_text.len > 0) {
+                command_history.append(input_text) catch {};
+            }
+
+            const rule_context = KnowledgeRulesManager.RuleContext{
+                .cwd = cwd,
+                .last_command = if (input_text.len > 0) input_text else null,
+                .command_history = command_history,
+                .last_output = null,
+                .git_state = null,
+                .env_vars = StringHashMap([]const u8).init(alloc),
+            };
+            defer rule_context.env_vars.deinit();
+
+            const knowledge_suggestions = kr.getSuggestions(rule_context, 3) catch null;
+            if (knowledge_suggestions) |ksugs| {
+                defer {
+                    for (ksugs.items) |*s| s.deinit(alloc);
+                    ksugs.deinit();
+                }
+
+                if (ksugs.items.len > 0) {
+                    var context_buf = ArrayList(u8).init(alloc);
+                    defer context_buf.deinit();
+
+                    if (context.len > 0) {
+                        try context_buf.writer().print("{s}\n\n", .{context});
+                    }
+
+                    try context_buf.writer().print("Knowledge-based suggestions:\n", .{});
+                    for (ksugs.items, 0..) |sug, i| {
+                        if (i >= 3) break;
+                        try context_buf.writer().print("  • {s} (confidence: {d:.1}%)\n", .{ sug.text, sug.confidence * 100.0 });
+                    }
+
+                    if (context.len > 0) {
+                        alloc.free(context);
+                    }
+                    const new_context = try context_buf.toOwnedSlice();
+                    context = new_context;
+                    if (priv.terminal_context) |old| alloc.free(old);
+                    priv.terminal_context = new_context;
+                }
+            }
+        }
 
         const prompt = blk: {
             // Get the template content
@@ -1190,7 +1395,20 @@ pub const AiInputMode = extern struct {
             }
 
             // Initialize streaming on main thread
-            const stream_init = alloc.create(StreamChunk) catch return;
+            const stream_init = alloc.create(StreamChunk) catch |err| {
+                log.err("Failed to allocate stream init chunk: {}", .{err});
+
+                // Send error result to main thread to notify user
+                const ai_result = alloc.create(AiResult) catch return;
+                ai_result.* = .{
+                    .input_mode = ctx.input_mode,
+                    .response = null,
+                    .err = std.fmt.allocPrintZ(alloc, "Error: Out of memory. Please close other apps and try again.", .{}) catch "Error: Memory allocation failed",
+                    .is_final = true,
+                };
+                _ = glib.idleAdd(aiResultCallback, ai_result);
+                return;
+            };
             stream_init.* = .{
                 .input_mode = ctx.input_mode,
                 .content = "",
@@ -1207,12 +1425,44 @@ pub const AiInputMode = extern struct {
 
                     if (input_mode) |mode| {
                         const alloc_cb = Application.default().allocator();
-                        const stream_chunk = alloc_cb.create(StreamChunk) catch return;
+                        const stream_chunk = alloc_cb.create(StreamChunk) catch |err| {
+                            log.err("Failed to allocate stream chunk: {}", .{err});
+                            return;
+                        };
                         stream_chunk.* = .{
                             .input_mode = mode,
-                            .content = alloc_cb.dupe(u8, chunk.content) catch "",
+                            .content = alloc_cb.dupe(u8, chunk.content) catch |err| {
+                                log.err("Failed to duplicate stream content: {}", .{err});
+                                alloc_cb.destroy(stream_chunk);
+                                return;
+                            },
                             .done = chunk.done,
                         };
+                        
+                        // Update progress bar if available
+                        if (mode) |m| {
+                            const priv_cb = getPriv(m);
+                            if (priv_cb.progress_bar) |pb| {
+                                if (!chunk.done) {
+                                    pb.setVisible(@intFromBool(true));
+                                    // Estimate progress based on content length (rough estimate)
+                                    const progress = @min(0.95, @as(f32, @floatFromInt(chunk.content.len)) / 10000.0);
+                                    pb.setFraction(progress);
+                                } else {
+                                    pb.setFraction(1.0);
+                                    // Hide after a short delay
+                                    const pb_ref = pb.ref();
+                                    _ = glib.timeoutAdd(500, struct {
+                                        fn callback(pb_ptr: *gtk.ProgressBar) callconv(.c) c_int {
+                                            pb_ptr.setVisible(false);
+                                            pb_ptr.setFraction(0.0);
+                                            pb_ptr.unref();
+                                            return 0; // G_SOURCE_REMOVE
+                                        }
+                                    }.callback, pb_ref, .{});
+                                }
+                            }
+                        }
                         _ = glib.idleAdd(streamChunkCallback, stream_chunk);
                     }
                 }
@@ -1415,6 +1665,410 @@ pub const AiInputMode = extern struct {
         _ = self;
         // Template change handling can be added here if needed
         // For now, the template is applied when sending
+    }
+
+    /// Signal handler for provider dropdown change
+    fn providerChanged(dropdown: *gtk.DropDown, param: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        _ = dropdown;
+        _ = param;
+        const priv = getPriv(self);
+        if (priv.updating_provider_dropdown) return;
+
+        const cfg_obj = priv.config orelse return;
+
+        const selected = priv.provider_dropdown.getSelected();
+        if (selected >= 4) return; // 4 providers: OpenAI, Anthropic, Ollama, Custom
+
+        const provider_enum: ?enum { openai, anthropic, ollama, custom } = switch (selected) {
+            0 => .openai,
+            1 => .anthropic,
+            2 => .ollama,
+            3 => .custom,
+            else => null,
+        };
+
+        if (provider_enum) |p| {
+            const cfg_mut = cfg_obj.getMut();
+            cfg_mut.@"ai-provider" = switch (p) {
+                .openai => .openai,
+                .anthropic => .anthropic,
+                .ollama => .ollama,
+                .custom => .custom,
+            };
+
+            // Update model dropdown for new provider
+            self.updateModelDropdown();
+
+            // Update endpoint visibility
+            priv.endpoint_row.setVisible(@intFromBool(p == .custom));
+
+            // Reinitialize assistant with new provider
+            self.setConfig(cfg_obj);
+        }
+    }
+
+    /// Signal handler for API key entry change
+    fn apiKeyChanged(entry: *gtk.Entry, param: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        _ = entry;
+        _ = param;
+        const priv = getPriv(self);
+        if (priv.updating_api_key) return;
+
+        const cfg_obj = priv.config orelse return;
+        const cfg_mut = cfg_obj.getMut();
+
+        const text = priv.api_key_entry.getText();
+        cfg_mut.@"ai-api-key" = cfg_mut.arenaAlloc().dupe(u8, text) catch return;
+
+        // Update send button sensitivity
+        const enabled = cfg_obj.get().@"ai-enabled";
+        const provider = cfg_obj.get().@"ai-provider" != null;
+        const api_key = cfg_mut.@"ai-api-key".len > 0 or
+            (cfg_obj.get().@"ai-provider" != null and cfg_obj.get().@"ai-provider".? == .ollama);
+
+        priv.send_sensitive = enabled and provider and api_key;
+        self.notify(properties.send_sensitive.name);
+    }
+
+    /// Signal handler for API key toggle button
+    fn apiKeyToggleClicked(button: *gtk.Button, self: *Self) callconv(.c) void {
+        _ = button;
+        const priv = getPriv(self);
+        const visible = priv.api_key_entry.getVisibility();
+        priv.api_key_entry.setVisibility(@intFromBool(!visible));
+        
+        const icon_name = if (visible) "eye-not-looking-symbolic" else "eye-open-negative-filled-symbolic";
+        priv.api_key_toggle.setIconName(icon_name);
+    }
+
+    /// Signal handler for endpoint entry change
+    fn endpointChanged(entry: *gtk.Entry, param: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        _ = entry;
+        _ = param;
+        const priv = getPriv(self);
+        const cfg_obj = priv.config orelse return;
+        const cfg_mut = cfg_obj.getMut();
+
+        const text = priv.endpoint_entry.getText();
+        cfg_mut.@"ai-endpoint" = cfg_mut.arenaAlloc().dupe(u8, text) catch return;
+
+        // Reinitialize assistant with new endpoint
+        self.setConfig(cfg_obj);
+    }
+
+    /// Signal handler for model dropdown change
+    fn model_changed(dropdown: *gtk.DropDown, param: *gobject.ParamSpec, self: *Self) callconv(.c) void {
+        _ = dropdown;
+        _ = param;
+        const priv = getPriv(self);
+        if (priv.updating_model_dropdown) return;
+
+        const cfg_obj = priv.config orelse return;
+        const cfg = cfg_obj.get();
+        const provider = cfg.@"ai-provider" orelse return;
+
+        const models: []const [:0]const u8 = switch (provider) {
+            .openai => &[_][:0]const u8{
+                "gpt-4o",
+                "gpt-4o-mini",
+                "gpt-4-turbo",
+                "gpt-4",
+                "gpt-3.5-turbo",
+            },
+            .anthropic => &[_][:0]const u8{
+                "claude-3-5-sonnet-20241022",
+                "claude-3-opus-20240229",
+                "claude-3-sonnet-20240229",
+                "claude-3-haiku-20240307",
+            },
+            .ollama => &[_][:0]const u8{
+                "llama3",
+                "llama3:8b",
+                "llama3:70b",
+                "mistral",
+                "codellama",
+                "phi",
+            },
+            .custom => &[_][:0]const u8{
+                "custom-model",
+            },
+        };
+
+        const selected = priv.model_dropdown.getSelected();
+        if (selected >= @as(c_uint, @intCast(models.len))) return;
+
+        const model_name = models[@intCast(selected)];
+        const cfg_mut = cfg_obj.getMut();
+        if (std.mem.eql(u8, cfg_mut.@"ai-model", model_name)) return;
+
+        // Note: config strings are owned by the config's arena allocator.
+        cfg_mut.@"ai-model" = cfg_mut.arenaAlloc().dupe(u8, model_name) catch return;
+
+        // Reinitialize assistant with new model
+        self.setConfig(cfg_obj);
+    }
+
+    /// Update model dropdown based on current provider and configuration.
+    fn updateModelDropdown(self: *Self) void {
+        const priv = getPriv(self);
+        const cfg_obj = priv.config orelse {
+            priv.model_dropdown.as(gtk.Widget).setSensitive(@intFromBool(false));
+            return;
+        };
+
+        priv.updating_model_dropdown = true;
+        defer priv.updating_model_dropdown = false;
+
+        const cfg = cfg_obj.get();
+        const provider = cfg.@"ai-provider" orelse {
+            priv.model_dropdown.as(gtk.Widget).setSensitive(@intFromBool(false));
+            return;
+        };
+
+        const models: []const [:0]const u8 = switch (provider) {
+            .openai => &[_][:0]const u8{
+                "gpt-4o",
+                "gpt-4o-mini",
+                "gpt-4-turbo",
+                "gpt-4",
+                "gpt-3.5-turbo",
+            },
+            .anthropic => &[_][:0]const u8{
+                "claude-3-5-sonnet-20241022",
+                "claude-3-opus-20240229",
+                "claude-3-sonnet-20240229",
+                "claude-3-haiku-20240307",
+            },
+            .ollama => &[_][:0]const u8{
+                "llama3",
+                "llama3:8b",
+                "llama3:70b",
+                "mistral",
+                "codellama",
+                "phi",
+            },
+            .custom => &[_][:0]const u8{
+                "custom-model",
+            },
+        };
+
+        const alloc = Application.default().allocator();
+        const model_list = ext.StringList.create(alloc, models) catch |err| {
+            log.err("Failed to create model string list: {}", .{err});
+            priv.model_dropdown.as(gtk.Widget).setSensitive(@intFromBool(false));
+            return;
+        };
+        priv.model_dropdown.setModel(model_list.as(gio.ListModel));
+
+        // Ensure selection matches config (or choose a default).
+        const current_model = cfg.@"ai-model";
+        var selected_idx: usize = 0;
+        var found = false;
+        if (current_model.len > 0) {
+            for (models, 0..) |name, i| {
+                if (std.mem.eql(u8, name, current_model)) {
+                    selected_idx = i;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        // If no model is set or it doesn't match provider, default to the first model.
+        if (!found and models.len > 0) {
+            const cfg_mut = cfg_obj.getMut();
+            cfg_mut.@"ai-model" = cfg_mut.arenaAlloc().dupe(u8, models[0]) catch {};
+        }
+
+        priv.model_dropdown.setSelected(@intCast(selected_idx));
+        priv.model_dropdown.as(gtk.Widget).setSensitive(@intFromBool(models.len > 0));
+    }
+
+    /// Update provider dropdown based on current configuration
+    fn updateProviderDropdown(self: *Self) void {
+        const priv = getPriv(self);
+        const cfg_obj = priv.config orelse {
+            priv.provider_dropdown.as(gtk.Widget).setSensitive(@intFromBool(false));
+            return;
+        };
+
+        priv.updating_provider_dropdown = true;
+        defer priv.updating_provider_dropdown = false;
+
+        const providers = &[_][:0]const u8{
+            "OpenAI",
+            "Anthropic",
+            "Ollama",
+            "Custom",
+        };
+
+        const alloc = Application.default().allocator();
+        const provider_list = ext.StringList.create(alloc, providers) catch |err| {
+            log.err("Failed to create provider string list: {}", .{err});
+            priv.provider_dropdown.as(gtk.Widget).setSensitive(@intFromBool(false));
+            return;
+        };
+        priv.provider_dropdown.setModel(provider_list.as(gio.ListModel));
+
+        // Set selection based on config
+        const cfg = cfg_obj.get();
+        const current_provider = cfg.@"ai-provider";
+        var selected_idx: usize = 0;
+        if (current_provider) |p| {
+            selected_idx = switch (p) {
+                .openai => 0,
+                .anthropic => 1,
+                .ollama => 2,
+                .custom => 3,
+            };
+        }
+
+        priv.provider_dropdown.setSelected(@intCast(selected_idx));
+        priv.provider_dropdown.as(gtk.Widget).setSensitive(@intFromBool(true));
+
+        // Update endpoint visibility
+        priv.endpoint_row.setVisible(@intFromBool(current_provider != null and current_provider.? == .custom));
+    }
+
+    /// Update API key entry based on current configuration
+    fn updateApiKeyEntry(self: *Self) void {
+        const priv = getPriv(self);
+        const alloc = Application.default().allocator();
+        const cfg_obj = priv.config orelse {
+            priv.api_key_entry.setSensitive(@intFromBool(false));
+            return;
+        };
+
+        priv.updating_api_key = true;
+        defer priv.updating_api_key = false;
+
+        const cfg = cfg_obj.get();
+        const api_key_z = alloc.dupeZ(u8, cfg.@"ai-api-key") catch {
+            priv.api_key_entry.setSensitive(@intFromBool(false));
+            return;
+        };
+        defer alloc.free(api_key_z);
+        priv.api_key_entry.setText(api_key_z);
+        priv.api_key_entry.setSensitive(@intFromBool(true));
+    }
+
+    /// Update endpoint entry based on current configuration
+    fn updateEndpointEntry(self: *Self) void {
+        const priv = getPriv(self);
+        const alloc = Application.default().allocator();
+        const cfg_obj = priv.config orelse {
+            priv.endpoint_entry.setSensitive(@intFromBool(false));
+            return;
+        };
+
+        const cfg = cfg_obj.get();
+        const endpoint_z = alloc.dupeZ(u8, cfg.@"ai-endpoint") catch {
+            priv.endpoint_entry.setSensitive(@intFromBool(false));
+            return;
+        };
+        defer alloc.free(endpoint_z);
+        priv.endpoint_entry.setText(endpoint_z);
+        priv.endpoint_entry.setSensitive(@intFromBool(true));
+    }
+
+    /// Register actions for the menu
+    fn registerActions(self: *Self) void {
+        const action_group = gio.SimpleActionGroup.new();
+
+        // Workflows action
+        const workflows_action = gio.SimpleAction.new("show-workflows", null);
+        _ = gio.SimpleAction.signals.activate.connect(workflows_action, *Self, showWorkflowsDialog, self, .{});
+        action_group.addAction(workflows_action);
+
+        // Notebooks action
+        const notebooks_action = gio.SimpleAction.new("show-notebooks", null);
+        _ = gio.SimpleAction.signals.activate.connect(notebooks_action, *Self, showNotebooksDialog, self, .{});
+        action_group.addAction(notebooks_action);
+
+        // History action
+        const history_action = gio.SimpleAction.new("show-history", null);
+        _ = gio.SimpleAction.signals.activate.connect(history_action, *Self, showHistoryDialog, self, .{});
+        action_group.addAction(history_action);
+
+        // Settings action
+        const settings_action = gio.SimpleAction.new("show-settings", null);
+        _ = gio.SimpleAction.signals.activate.connect(settings_action, *Self, showSettingsDialog, self, .{});
+        action_group.addAction(settings_action);
+
+        // Insert action group
+        self.as(gtk.Widget).insertActionGroup("ai", action_group.as(gio.ActionGroup));
+    }
+
+    /// Show workflows dialog
+    fn showWorkflowsDialog(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const dialog = adw.MessageDialog.new(null, "Workflows", "Manage and execute AI workflows");
+        dialog.setBody("Workflow management will be available in a future update.");
+        dialog.addResponse("ok", "OK");
+        dialog.setDefaultResponse("ok");
+        dialog.setCloseResponse("ok");
+        dialog.setModal(@intFromBool(true));
+        
+        const win = priv.window orelse return;
+        dialog.setTransientFor(win.as(gtk.Window));
+        dialog.present();
+    }
+
+    /// Show notebooks dialog
+    fn showNotebooksDialog(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const dialog = adw.MessageDialog.new(null, "Notebooks", "Create and manage executable notebooks");
+        dialog.setBody("Notebook management will be available in a future update.");
+        dialog.addResponse("ok", "OK");
+        dialog.setDefaultResponse("ok");
+        dialog.setCloseResponse("ok");
+        dialog.setModal(@intFromBool(true));
+        
+        const win = priv.window orelse return;
+        dialog.setTransientFor(win.as(gtk.Window));
+        dialog.present();
+    }
+
+    /// Show history dialog
+    fn showHistoryDialog(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const dialog = adw.MessageDialog.new(null, "Command History", "View and search command history");
+        dialog.setBody("Rich command history will be available in a future update.");
+        dialog.addResponse("ok", "OK");
+        dialog.setDefaultResponse("ok");
+        dialog.setCloseResponse("ok");
+        dialog.setModal(@intFromBool(true));
+        
+        const win = priv.window orelse return;
+        dialog.setTransientFor(win.as(gtk.Window));
+        dialog.present();
+    }
+
+    /// Show settings dialog
+    fn showSettingsDialog(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const dialog = adw.MessageDialog.new(null, "AI Settings", "Configure AI assistant preferences");
+        dialog.setBody("Advanced AI settings will be available in a future update.");
+        dialog.addResponse("ok", "OK");
+        dialog.setDefaultResponse("ok");
+        dialog.setCloseResponse("ok");
+        dialog.setModal(@intFromBool(true));
+        
+        const win = priv.window orelse return;
+        dialog.setTransientFor(win.as(gtk.Window));
+        dialog.present();
     }
 
     /// Signal handler for stop button click
@@ -1744,28 +2398,91 @@ pub const AiInputMode = extern struct {
         defer glib.free(@ptrCast(@constCast(text.ptr)));
 
         // Check if we should show suggestions
+        var has_suggestions = false;
+
         if (priv.prompt_suggestion_service) |*service| {
             if (!service.shouldShowSuggestion(text, 2)) {
-                self.hideSuggestions();
-                return;
-            }
-
-            // Get suggestions
-            const suggestions = service.getSuggestions(text, priv.selected_text, priv.terminal_context) catch |err| {
-                log.err("Failed to get prompt suggestions: {}", .{err});
-                return;
-            };
-            defer {
-                for (suggestions.items) |*s| s.deinit(alloc);
-                suggestions.deinit();
-            }
-
-            // Show suggestions if we have any
-            if (suggestions.items.len > 0) {
-                self.showSuggestions(suggestions.items);
+                // Check knowledge rules even if prompt suggestions aren't shown
             } else {
-                self.hideSuggestions();
+                // Get prompt suggestions
+                const suggestions = service.getSuggestions(text, priv.selected_text, priv.terminal_context) catch |err| {
+                    log.err("Failed to get prompt suggestions: {}", .{err});
+                    return;
+                };
+                defer {
+                    for (suggestions.items) |*s| s.deinit(alloc);
+                    suggestions.deinit();
+                }
+
+                // Show suggestions if we have any
+                if (suggestions.items.len > 0) {
+                    self.showSuggestions(suggestions.items);
+                    has_suggestions = true;
+                }
             }
+        }
+
+        // Also check knowledge rules for context-aware suggestions
+        if (priv.knowledge_rules) |*kr| {
+            const cwd_result = std.fs.cwd().realpathAlloc(alloc, ".");
+            const cwd = cwd_result catch ".";
+            defer if (cwd_result) |c| alloc.free(c);
+
+            var command_history = ArrayList([]const u8).init(alloc);
+            defer {
+                for (command_history.items) |_| {}
+                command_history.deinit();
+            }
+
+            if (text.len > 0) {
+                command_history.append(text) catch {};
+            }
+
+            const rule_context = KnowledgeRulesManager.RuleContext{
+                .cwd = cwd,
+                .last_command = if (text.len > 0) text else null,
+                .command_history = command_history,
+                .last_output = null,
+                .git_state = null,
+                .env_vars = StringHashMap([]const u8).init(alloc),
+            };
+            defer rule_context.env_vars.deinit();
+
+            const knowledge_suggestions = kr.getSuggestions(rule_context, 3) catch null;
+            if (knowledge_suggestions) |ksugs| {
+                defer {
+                    for (ksugs.items) |*s| s.deinit(alloc);
+                    ksugs.deinit();
+                }
+
+                if (ksugs.items.len > 0 and !has_suggestions) {
+                    // Convert knowledge suggestions to prompt suggestions for display
+                    var prompt_suggestions = ArrayList(PromptSuggestion).init(alloc);
+                    defer {
+                        for (prompt_suggestions.items) |*s| s.deinit(alloc);
+                        prompt_suggestions.deinit();
+                    }
+
+                    for (ksugs.items) |ksug| {
+                        const prompt_sug = PromptSuggestion{
+                            .completion = try alloc.dupe(u8, ksug.text),
+                            .description = try std.fmt.allocPrint(alloc, "Knowledge rule: {s} ({d:.0}% confidence)", .{ ksug.rule_name, ksug.confidence * 100.0 }),
+                            .kind = .command,
+                            .confidence = ksug.confidence,
+                        };
+                        prompt_suggestions.append(prompt_sug) catch continue;
+                    }
+
+                    if (prompt_suggestions.items.len > 0) {
+                        self.showSuggestions(prompt_suggestions.items);
+                        has_suggestions = true;
+                    }
+                }
+            }
+        }
+
+        if (!has_suggestions) {
+            self.hideSuggestions();
         }
     }
 

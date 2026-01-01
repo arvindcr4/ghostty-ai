@@ -1,6 +1,7 @@
 import SwiftUI
 import Foundation
 import GhosttyKit
+import Speech
 
 /// AI Input Mode View for macOS
 /// Provides a Warp-like AI assistant interface for command explanation,
@@ -15,6 +16,7 @@ struct AIInputModeView: View {
     @State private var selectedText: String?
     @State private var terminalContext: String?
     @State private var agentModeEnabled: Bool = false
+    @StateObject private var voiceInput = VoiceInputManager()
 
     let templates = [
         "Custom Question",
@@ -40,7 +42,7 @@ struct AIInputModeView: View {
                 .pickerStyle(.menu)
                 Toggle("Agent Mode", isOn: $agentModeEnabled)
                     .toggleStyle(.switch)
-                    .help("Agent mode: auto-run commands from AI responses")
+                    .help("⚠️ Agent mode: automatically executes shell commands from AI responses WITHOUT confirmation. Use with caution - only enable for trusted AI providers!")
                 Spacer()
             }
             .padding(.horizontal)
@@ -58,6 +60,23 @@ struct AIInputModeView: View {
                             .fill(Color(NSColor.textBackgroundColor))
                     )
 
+                // Voice input button
+                Button(action: {
+                    // Check authorization before allowing voice input
+                    if voiceInput.authorizationStatus == .notDetermined {
+                        voiceInput.requestAuthorization()
+                    } else if voiceInput.authorizationStatus == .authorized {
+                        voiceInput.toggleListening()
+                    }
+                    // If denied/restricted, button appears to do nothing - errorMessage will show the issue
+                }) {
+                    Image(systemName: voiceInput.isListening ? "mic.fill" : "mic")
+                        .foregroundColor(voiceInput.isListening ? .red : .secondary)
+                }
+                .disabled(voiceInput.authorizationStatus == .denied || voiceInput.authorizationStatus == .restricted)
+                .buttonStyle(.plain)
+                .help(voiceInput.isListening ? "Stop listening" : "Voice input")
+
                 Button(action: sendRequest) {
                     Image(systemName: "paperplane.fill")
                 }
@@ -67,6 +86,16 @@ struct AIInputModeView: View {
             }
             .padding(.horizontal)
             .padding(.bottom, 8)
+            .onChange(of: voiceInput.transcribedText) { newValue in
+                // Only replace if input is empty or contains voice text
+                // This prevents voice from accidentally overwriting user's typed input
+                if !newValue.isEmpty {
+                    if userInput.isEmpty {
+                        userInput = newValue
+                    }
+                    // If user has manually edited, we don't overwrite
+                }
+            }
 
             Divider()
 
@@ -78,6 +107,32 @@ struct AIInputModeView: View {
                 }
                 .font(.caption)
                 .foregroundColor(.secondary)
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+            }
+
+            // Voice input status
+            if voiceInput.isListening {
+                HStack {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                    Text("Listening... speak now")
+                }
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal)
+                .padding(.vertical, 4)
+            }
+
+            // Voice input error
+            if let errorMessage = voiceInput.errorMessage {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(errorMessage)
+                }
+                .font(.caption)
+                .foregroundColor(.red)
                 .padding(.horizontal)
                 .padding(.vertical, 4)
             }

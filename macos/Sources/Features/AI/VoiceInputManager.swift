@@ -1,0 +1,256 @@
+import Foundation
+import Speech
+import AVFoundation
+
+/// Manages voice input using Apple's Speech framework
+@MainActor
+class VoiceInputManager: ObservableObject {
+    @Published var isListening: Bool = false
+    @Published var transcribedText: String = ""
+    @Published var errorMessage: String?
+    @Published var authorizationStatus: SFSpeechRecognizerAuthorizationStatus = .notDetermined
+
+    private var speechRecognizer: SFSpeechRecognizer?
+    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var recognitionTask: SFSpeechRecognitionTask?
+    private var audioEngine: AVAudioEngine?
+    private var silenceTimer: Timer?
+    private var debounceTask: Task<Void, Never>?
+
+    // Speech recognition error codes
+    // Reference: https://developer.apple.com/documentation/speech/sfspeechrecognitionerror/code
+    private let speechRecognitionCancelledErrorCode = 216 // kSFSpeechRecognitionErrorCancelled
+
+    // Listening timeout: 60 seconds of silence stops recording
+    private let silenceTimeoutSeconds: TimeInterval = 60.0
+
+    // Debounce delay for partial results (ms) - reduces excessive UI updates
+    private let partialResultsDebounceMs: UInt64 = 300_000_000 // 300ms
+
+    init() {
+        // Use system locale with fallback to en-US
+        // TODO: Make this configurable in settings for internationalization
+        let locale = Locale.current.identifier
+        speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
+
+        if speechRecognizer == nil {
+            // Log error and provide clear message
+            print("VoiceInputManager: Speech recognizer initialization failed for locale '\(locale)'. Your device may not support speech recognition for this locale.")
+            errorMessage = "Speech recognition is not available for your locale. Using English (US) as fallback."
+            // Try fallback to en-US
+            speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+        }
+        checkAuthorizationStatus()
+    }
+
+    /// Clean up resources when deallocated
+    /// Critical for preventing resource leaks with AVAudioEngine
+    /// Note: We don't call stopListening() here because deinit is not actor-isolated
+    /// and stopListening() is @MainActor isolated. The audio engine will be stopped
+    /// automatically when it's deallocated.
+    deinit {
+        // Cancel any pending tasks
+        debounceTask?.cancel()
+        // AVAudioEngine cleanup happens automatically when deallocated
+    }
+
+    /// Check current authorization status
+    func checkAuthorizationStatus() {
+        authorizationStatus = SFSpeechRecognizer.authorizationStatus()
+    }
+
+    /// Request authorization for speech recognition
+    func requestAuthorization() {
+        SFSpeechRecognizer.requestAuthorization { [weak self] status in
+            Task { @MainActor in
+                self?.authorizationStatus = status
+                if status != .authorized {
+                    self?.errorMessage = self?.authorizationMessage(for: status)
+                }
+            }
+        }
+    }
+
+    /// Start listening for speech input
+    func startListening() {
+        guard !isListening else { return }
+
+        // Check authorization
+        guard authorizationStatus == .authorized else {
+            if authorizationStatus == .notDetermined {
+                requestAuthorization()
+            } else {
+                errorMessage = authorizationMessage(for: authorizationStatus)
+            }
+            return
+        }
+
+        // Check speech recognizer availability
+        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
+            errorMessage = "Speech recognition is not available on this device"
+            return
+        }
+
+        do {
+            try startRecognition()
+        } catch {
+            errorMessage = "Failed to start speech recognition: \(error.localizedDescription)"
+        }
+    }
+
+    /// Stop listening and finalize transcription
+    func stopListening() {
+        guard isListening else { return }
+
+        // Invalidate silence timer
+        silenceTimer?.invalidate()
+        silenceTimer = nil
+
+        // Cancel debounce task
+        debounceTask?.cancel()
+
+        audioEngine?.stop()
+        audioEngine?.inputNode.removeTap(onBus: 0)
+        recognitionRequest?.endAudio()
+
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        recognitionRequest = nil
+
+        isListening = false
+    }
+
+    /// Toggle listening state
+    func toggleListening() {
+        if isListening {
+            stopListening()
+        } else {
+            startListening()
+        }
+    }
+
+    // MARK: - Private Methods
+
+    private func startRecognition() throws {
+        // Cancel any previous task
+        recognitionTask?.cancel()
+        recognitionTask = nil
+
+        // Note: AVAudioSession is iOS-only. On macOS, AVAudioEngine handles
+        // audio routing automatically without session configuration.
+
+        // Create recognition request
+        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+        guard let recognitionRequest = recognitionRequest else {
+            throw VoiceInputError.recognitionRequestFailed
+        }
+
+        recognitionRequest.shouldReportPartialResults = true
+        recognitionRequest.taskHint = .dictation
+
+        // Create audio engine
+        audioEngine = AVAudioEngine()
+        guard let audioEngine = audioEngine else {
+            throw VoiceInputError.audioEngineFailed
+        }
+
+        let inputNode = audioEngine.inputNode
+        let recordingFormat = inputNode.outputFormat(forBus: 0)
+
+        // Validate format
+        guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+            throw VoiceInputError.invalidAudioFormat
+        }
+
+        // Buffer size: 1024 samples (~21ms at 48kHz) balances latency vs CPU overhead
+        // Apple recommends 1024-4096 for speech recognition
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            recognitionRequest.append(buffer)
+        }
+
+        audioEngine.prepare()
+        try audioEngine.start()
+
+        isListening = true
+        transcribedText = ""
+        errorMessage = nil
+
+        // Set up silence timeout - auto-stop after N seconds of no speech
+        silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceTimeoutSeconds, repeats: false) { [weak self] _ in
+            self?.stopListening()
+            self?.errorMessage = "Listening timed out due to silence. Tap mic to try again."
+        }
+
+        // Start recognition task with debouncing for partial results
+        recognitionTask = speechRecognizer?.recognitionTask(with: recognitionRequest) { [weak self] result, error in
+            Task { @MainActor in
+                guard let self = self else { return }
+
+                if let result = result {
+                    // Reset silence timer when we get speech results
+                    self.silenceTimer?.invalidate()
+                    self.silenceTimer = Timer.scheduledTimer(withTimeInterval: self.silenceTimeoutSeconds, repeats: false) { [weak self] _ in
+                        self?.stopListening()
+                        self?.errorMessage = "Listening timed out due to silence."
+                    }
+
+                    // Debounce partial results to reduce excessive UI updates
+                    self.debounceTask?.cancel()
+                    self.debounceTask = Task {
+                        try? await Task.sleep(nanoseconds: self.partialResultsDebounceMs)
+                        if !Task.isCancelled {
+                            self.transcribedText = result.bestTranscription.formattedString
+                        }
+                    }
+                }
+
+                if let error = error {
+                    // Don't show error if we intentionally cancelled
+                    let nsError = error as NSError
+                    if nsError.code != self.speechRecognitionCancelledErrorCode {
+                        self.errorMessage = error.localizedDescription
+                    }
+                    self.stopListening()
+                }
+
+                if result?.isFinal == true {
+                    self.stopListening()
+                }
+            }
+        }
+    }
+
+    private func authorizationMessage(for status: SFSpeechRecognizerAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined:
+            return "Speech recognition permission not yet requested"
+        case .denied:
+            return "Speech recognition permission denied. Enable it in System Settings > Privacy & Security > Speech Recognition"
+        case .restricted:
+            return "Speech recognition is restricted on this device"
+        case .authorized:
+            return ""
+        @unknown default:
+            return "Unknown authorization status"
+        }
+    }
+}
+
+// MARK: - Errors
+
+enum VoiceInputError: LocalizedError {
+    case recognitionRequestFailed
+    case audioEngineFailed
+    case invalidAudioFormat
+
+    var errorDescription: String? {
+        switch self {
+        case .recognitionRequestFailed:
+            return "Failed to create speech recognition request"
+        case .audioEngineFailed:
+            return "Failed to initialize audio engine"
+        case .invalidAudioFormat:
+            return "Invalid audio format from microphone"
+        }
+    }
+}

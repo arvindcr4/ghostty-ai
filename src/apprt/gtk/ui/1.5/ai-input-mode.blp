@@ -28,6 +28,13 @@ Adw.Dialog dialog {
           styles ["flat"]
         }
 
+        Gtk.ToggleButton voice_btn {
+          icon-name: "audio-input-microphone-symbolic";
+          tooltip-text: _("Voice input");
+          toggled => $voice_toggled();
+          styles ["flat"]
+        }
+
         Gtk.Button regenerate_btn {
           icon-name: "view-refresh-symbolic";
           tooltip-text: _("Regenerate response");
@@ -53,6 +60,42 @@ Adw.Dialog dialog {
           clicked => $send_clicked();
           styles ["suggested-action"]
         }
+
+        Gtk.MenuButton menu_btn {
+          icon-name: "open-menu-symbolic";
+          tooltip-text: _("More options");
+          styles ["flat"]
+          menu-model: Gio.Menu {
+            section {
+              item {
+                attribute name: "workflows";
+                attribute label: _("Workflows");
+                attribute icon: "workflow-symbolic";
+                action: "ai.show-workflows";
+              }
+              item {
+                attribute name: "notebooks";
+                attribute label: _("Notebooks");
+                attribute icon: "text-x-generic-symbolic";
+                action: "ai.show-notebooks";
+              }
+              item {
+                attribute name: "history";
+                attribute label: _("Command History");
+                attribute icon: "document-open-recent-symbolic";
+                action: "ai.show-history";
+              }
+            }
+            section {
+              item {
+                attribute name: "settings";
+                attribute label: _("AI Settings");
+                attribute icon: "preferences-system-symbolic";
+                action: "ai.show-settings";
+              }
+            }
+          }
+        }
       }
     }
 
@@ -61,21 +104,107 @@ Adw.Dialog dialog {
       spacing: 12;
 
       Gtk.Box template_box {
-        orientation: horizontal;
+        orientation: vertical;
         spacing: 6;
         margin-start: 12;
         margin-end: 12;
         margin-top: 12;
 
-        Gtk.Label {
-          label: _("Template:");
-          halign: start;
-          styles ["dim-label"]
+        Gtk.Box template_row {
+          orientation: horizontal;
+          spacing: 6;
+
+          Gtk.Label {
+            label: _("Template:");
+            halign: start;
+            styles ["dim-label"]
+            width-request: 80;
+          }
+
+          Gtk.DropDown template_dropdown {
+            hexpand: true;
+            notify::selected => $template_changed();
+          }
         }
 
-        Gtk.DropDown template_dropdown {
-          hexpand: true;
-          notify::selected => $template_changed();
+        Gtk.Box provider_row {
+          orientation: horizontal;
+          spacing: 6;
+
+          Gtk.Label {
+            label: _("Provider:");
+            halign: start;
+            styles ["dim-label"]
+            width-request: 80;
+          }
+
+          Gtk.DropDown provider_dropdown {
+            hexpand: true;
+            notify::selected => $provider_changed();
+          }
+        }
+
+        Gtk.Box model_row {
+          orientation: horizontal;
+          spacing: 6;
+
+          Gtk.Label {
+            label: _("Model:");
+            halign: start;
+            styles ["dim-label"]
+            width-request: 80;
+          }
+
+          Gtk.DropDown model_dropdown {
+            hexpand: true;
+            notify::selected => $model_changed();
+          }
+        }
+
+        Gtk.Box api_key_row {
+          orientation: horizontal;
+          spacing: 6;
+
+          Gtk.Label {
+            label: _("API Key:");
+            halign: start;
+            styles ["dim-label"]
+            width-request: 80;
+          }
+
+          Gtk.Entry api_key_entry {
+            hexpand: true;
+            visibility: false;
+            input-purpose: password;
+            placeholder-text: _("Enter API key...");
+            notify::text => $api_key_changed();
+          }
+
+          Gtk.Button api_key_toggle {
+            icon-name: "eye-not-looking-symbolic";
+            tooltip-text: _("Show/Hide API key");
+            clicked => $api_key_toggle_clicked();
+            styles ["flat"]
+          }
+        }
+
+        Gtk.Box endpoint_row {
+          orientation: horizontal;
+          spacing: 6;
+          visible: false;
+
+          Gtk.Label {
+            label: _("Endpoint:");
+            halign: start;
+            styles ["dim-label"]
+            width-request: 80;
+          }
+
+          Gtk.Entry endpoint_entry {
+            hexpand: true;
+            placeholder-text: _("https://api.example.com/v1");
+            notify::text => $endpoint_changed();
+          }
         }
       }
 
@@ -266,6 +395,16 @@ Adw.Dialog dialog {
           visible: false;
           vexpand: true;
           styles ["dim-label", "heading"]
+        }
+
+        Gtk.ProgressBar progress_bar {
+          visible: false;
+          show-text: true;
+          fraction: 0.0;
+          margin-start: 12;
+          margin-end: 12;
+          margin-top: 6;
+          margin-bottom: 6;
         }
       }
     }
