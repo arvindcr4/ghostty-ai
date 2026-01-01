@@ -2170,4 +2170,263 @@ pub const CAPI = struct {
             }
         }
     };
+
+    // -----------------------------------------------------------------
+    // AI API
+    // These functions expose AI functionality to the embedding runtime.
+    // Matches the API declared in ghostty.h
+    // -----------------------------------------------------------------
+
+    const ai_main = @import("../ai/main.zig");
+    const ai_client = @import("../ai/client.zig");
+
+    /// AI Assistant wrapper for C API (opaque type)
+    const AiAssistant = struct {
+        allocator: Allocator,
+        client: ai_client.Client,
+        system_prompt: []const u8,
+        provider_name: [:0]const u8,
+    };
+
+    /// AI Response structure for C API (matches ghostty_ai_response_s)
+    pub const AiResponse = extern struct {
+        content: ?[*]const u8,
+        content_len: usize,
+        provider: ?[*:0]const u8,
+        success: bool,
+        error_message: ?[*:0]const u8,
+    };
+
+    /// Create AI assistant from app config
+    export fn ghostty_ai_new(app: *App) ?*AiAssistant {
+        const config = &app.config;
+
+        // Check if AI is enabled
+        if (!config.@"ai-enabled") {
+            log.warn("AI is not enabled in configuration", .{});
+            return null;
+        }
+
+        // Get provider - use ai_client.Provider to match the expected type
+        const config_provider = config.@"ai-provider" orelse {
+            log.warn("AI provider not configured", .{});
+            return null;
+        };
+        // Convert to ai_client.Provider (same enum layout, different import path)
+        const provider: ai_client.Provider = @enumFromInt(@intFromEnum(config_provider));
+
+        // Get model
+        const model = config.@"ai-model";
+        if (model.len == 0) {
+            log.warn("AI model not configured", .{});
+            return null;
+        }
+
+        // Allocate the assistant
+        const assistant = global.alloc.create(AiAssistant) catch {
+            log.err("Failed to allocate AI assistant", .{});
+            return null;
+        };
+
+        // Create client
+        assistant.* = .{
+            .allocator = global.alloc,
+            .client = ai_client.Client.init(
+                global.alloc,
+                provider,
+                config.@"ai-api-key",
+                config.@"ai-endpoint",
+                model,
+                config.@"ai-max-tokens",
+                config.@"ai-temperature",
+            ),
+            .system_prompt = config.@"ai-system-prompt",
+            .provider_name = switch (provider) {
+                .openai => "openai",
+                .anthropic => "anthropic",
+                .ollama => "ollama",
+                .custom => "custom",
+            },
+        };
+
+        return assistant;
+    }
+
+    /// Free AI assistant
+    export fn ghostty_ai_free(ai: ?*AiAssistant) void {
+        if (ai) |assistant| {
+            global.alloc.destroy(assistant);
+        }
+    }
+
+    /// Check if AI is ready (configured with provider and API key)
+    export fn ghostty_ai_is_ready(ai: ?*AiAssistant) bool {
+        return ai != null;
+    }
+
+    /// Send a chat request (blocking)
+    export fn ghostty_ai_chat(
+        ai: ?*AiAssistant,
+        prompt_ptr: [*]const u8,
+        prompt_len: usize,
+        context_ptr: ?[*]const u8,
+        context_len: usize,
+    ) AiResponse {
+        _ = context_ptr;
+        _ = context_len;
+
+        const assistant = ai orelse {
+            return .{
+                .content = null,
+                .content_len = 0,
+                .provider = null,
+                .success = false,
+                .error_message = "AI assistant not initialized",
+            };
+        };
+
+        // Validate prompt
+        if (prompt_len == 0) {
+            return .{
+                .content = null,
+                .content_len = 0,
+                .provider = assistant.provider_name,
+                .success = false,
+                .error_message = "Prompt cannot be empty",
+            };
+        }
+
+        // Convert C strings to Zig strings
+        const prompt = prompt_ptr[0..prompt_len];
+
+        // Make the chat request
+        const chat_result = assistant.client.chat(
+            assistant.system_prompt,
+            prompt,
+        );
+
+        // Handle the result
+        const response = chat_result catch {
+            return .{
+                .content = null,
+                .content_len = 0,
+                .provider = assistant.provider_name,
+                .success = false,
+                .error_message = "Error from AI client",
+            };
+        };
+
+        // Allocate memory for the content
+        const content_copy = assistant.allocator.dupe(u8, response.content) catch {
+            response.deinit(assistant.allocator);
+            return .{
+                .content = null,
+                .content_len = 0,
+                .provider = assistant.provider_name,
+                .success = false,
+                .error_message = "Failed to allocate memory for response",
+            };
+        };
+
+        // Provider name needs to be null-terminated for C
+        const provider_copy = assistant.allocator.dupeZ(u8, response.provider) catch {
+            assistant.allocator.free(content_copy);
+            response.deinit(assistant.allocator);
+            return .{
+                .content = null,
+                .content_len = 0,
+                .provider = assistant.provider_name,
+                .success = false,
+                .error_message = "Failed to allocate memory for provider",
+            };
+        };
+
+        response.deinit(assistant.allocator);
+
+        return .{
+            .content = content_copy.ptr,
+            .content_len = content_copy.len,
+            .provider = provider_copy.ptr,
+            .success = true,
+            .error_message = null,
+        };
+    }
+
+    // Streaming chat API - simulated streaming for Zig 0.15 compatibility
+    // Since Zig 0.15's std.http doesn't support proper streaming, we simulate it
+    // by calling the regular chat function and sending the response in chunks.
+    export fn ghostty_ai_chat_stream(
+        ai: ?*AiAssistant,
+        prompt_ptr: [*]const u8,
+        prompt_len: usize,
+        context_ptr: ?[*]const u8,
+        context_len: usize,
+        callback: *const fn ([*]const u8, usize, bool, ?*anyopaque) callconv(.c) void,
+        userdata: ?*anyopaque,
+    ) bool {
+        _ = context_ptr;
+        _ = context_len;
+
+        const assistant = ai orelse {
+            // Call callback with error
+            const err_msg = "AI assistant not initialized";
+            callback(err_msg.ptr, err_msg.len, true, userdata);
+            return false;
+        };
+
+        // Validate prompt
+        if (prompt_len == 0) {
+            const err_msg = "Prompt cannot be empty";
+            callback(err_msg.ptr, err_msg.len, true, userdata);
+            return false;
+        }
+
+        // Convert C strings to Zig strings
+        const prompt = prompt_ptr[0..prompt_len];
+
+        // Make the chat request (blocking)
+        const chat_result = assistant.client.chat(
+            assistant.system_prompt,
+            prompt,
+        );
+
+        // Handle the result
+        const response = chat_result catch {
+            const err_msg = "Error from AI client";
+            callback(err_msg.ptr, err_msg.len, true, userdata);
+            return false;
+        };
+
+        defer response.deinit(assistant.allocator);
+
+        // Simulate streaming by sending the response in chunks
+        const content = response.content;
+        const chunk_size = 100; // Send in 100-character chunks
+
+        var i: usize = 0;
+        while (i < content.len) {
+            const end = @min(i + chunk_size, content.len);
+            const chunk = content[i..end];
+            
+            // Send chunk
+            callback(chunk.ptr, chunk.len, false, userdata);
+
+            i = end;
+        }
+
+        // Send final done signal
+        callback("".ptr, 0, true, userdata);
+        return true;
+    }
+
+    /// Free AI response
+    export fn ghostty_ai_response_free(ai: ?*AiAssistant, response: *AiResponse) void {
+        if (ai) |assistant| {
+            if (response.content) |content| {
+                if (response.content_len > 0) {
+                    assistant.allocator.free(content[0..response.content_len :0]);
+                }
+            }
+        }
+    }
 };

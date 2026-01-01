@@ -33,6 +33,7 @@ const MetricModifier = fontpkg.Metrics.Modifier;
 const help_strings = @import("help_strings");
 pub const Command = @import("command.zig").Command;
 const RepeatableReadableIO = @import("io.zig").RepeatableReadableIO;
+const ai = @import("ai.zig");
 const RepeatableStringMap = @import("RepeatableStringMap.zig");
 pub const Path = @import("path.zig").Path;
 pub const RepeatablePath = @import("path.zig").RepeatablePath;
@@ -2694,6 +2695,160 @@ keybind: Keybinds = .{},
 ///
 /// Available since: 1.2.0
 @"command-palette-entry": RepeatableCommand = .{},
+
+/// AI Assistant Configuration
+/// ==========================
+///
+/// Ghostty provides Warp-like AI features to help you work more efficiently
+/// in the terminal. The AI assistant can explain commands, fix errors,
+/// suggest optimizations, and more.
+///
+/// Enable or disable the AI assistant features globally. This must be set
+/// to true for any AI features to work.
+///
+/// Default: false
+@"ai-enabled": bool = false,
+
+/// The AI provider to use for assistant features. Each provider has different
+/// capabilities and pricing models:
+///
+///   * `openai` - OpenAI API (GPT-4, GPT-3.5)
+///   * `anthropic` - Anthropic Claude API
+///   * `ollama` - Local LLM via Ollama (free, requires Ollama installed)
+///   * `custom` - Custom OpenAI-compatible endpoint
+///
+/// Default: null (must be configured)
+@"ai-provider": ?ai.Provider = null,
+
+/// API key for the selected AI provider. This should be kept secure and
+/// not committed to version control. You can use environment variables
+/// in your config file:
+///
+/// ```ini
+/// ai-api-key = ${OPENAI_API_KEY}
+/// ```
+///
+/// For Ollama, this field is not used.
+///
+/// Default: ""
+@"ai-api-key": []const u8 = "",
+
+/// Custom endpoint URL for the 'custom' provider or for self-hosted
+/// instances. For example, a local vLLM endpoint:
+///
+/// ```ini
+/// ai-endpoint = http://localhost:8000/v1/chat/completions
+/// ```
+///
+/// Default: ""
+@"ai-endpoint": []const u8 = "",
+
+/// The AI model to use for requests. The available models depend on the
+/// provider:
+///
+/// OpenAI: `gpt-4`, `gpt-4-turbo`, `gpt-3.5-turbo`, etc.
+/// Anthropic: `claude-3-opus`, `claude-3-sonnet`, `claude-3-haiku`
+/// Ollama: `llama2`, `mistral`, `codellama`, etc.
+/// Custom: Depends on your endpoint
+///
+/// Default: ""
+@"ai-model": []const u8 = "",
+
+/// Maximum number of tokens for AI responses. Higher values allow longer
+/// responses but cost more (for paid APIs). Typical values:
+///   * 500-1000 for quick answers
+///   * 2000-3000 for detailed explanations
+///   * 4000+ for comprehensive responses
+///
+/// Default: 1000
+@"ai-max-tokens": u32 = 1000,
+
+/// Temperature controls randomness in AI responses (0.0 - 2.0):
+///   * 0.0-0.3: More focused, deterministic, factual
+///   * 0.4-0.7: Balanced (recommended for most use cases)
+///   * 0.8-1.0: More creative, varied
+///   * 1.1-2.0: Very creative, unpredictable
+///
+/// Default: 0.7
+@"ai-temperature": f32 = 0.7,
+
+/// Enable context awareness for AI requests. When enabled, the AI assistant
+/// will include recent terminal history (commands and outputs) as context
+/// for better, more relevant responses.
+///
+/// Default: true
+@"ai-context-aware": bool = true,
+
+/// Number of lines of terminal history to include as context when
+/// context-aware mode is enabled. More context provides better responses
+/// but uses more tokens and may be slower.
+///
+/// Default: 50
+@"ai-context-lines": u32 = 50,
+
+/// Custom system prompt for the AI assistant. This sets the behavior and
+/// personality of the AI. The default prompt is optimized for terminal
+/// assistance, but you can customize it for your needs.
+///
+/// Example:
+/// ```ini
+/// ai-system-prompt = You are a DevOps expert. Focus on infrastructure and deployment questions.
+/// ```
+///
+/// Default: (built-in terminal-optimized prompt)
+@"ai-system-prompt": []const u8 = @embedFile("ai_default_prompt.txt"),
+
+/// Whether to automatically redact sensitive information (API keys, passwords,
+/// tokens, etc.) from AI responses when sharing or copying. This helps prevent
+/// accidental exposure of secrets.
+///
+/// Default: true
+@"ai-redact-secrets": bool = true,
+
+/// Enable Active AI - proactive contextual recommendations based on terminal
+/// activity without requiring an explicit user prompt. Active AI monitors
+/// terminal state changes (command failures, slow execution, git changes, etc.)
+/// and automatically offers helpful suggestions.
+///
+/// When enabled, Active AI will:
+/// - Suggest fixes when commands fail
+/// - Offer optimizations for slow commands
+/// - Recommend next steps in recognized workflows (e.g., git add -> commit -> push)
+/// - Provide contextual tips when changing directories
+/// - Alert you to git status changes
+///
+/// Default: true
+@"ai-active-enabled": bool = true,
+
+/// Minimum command execution duration (in milliseconds) to trigger "slow command"
+/// recommendations from Active AI. Commands that take longer than this threshold
+/// will trigger performance optimization suggestions.
+///
+/// Default: 5000 (5 seconds)
+@"ai-active-slow-threshold": u32 = 5000,
+
+/// Idle timeout (in milliseconds) after command completion before Active AI
+/// offers recommendations. This prevents immediate interruptions while still
+/// providing timely suggestions.
+///
+/// Default: 30000 (30 seconds)
+@"ai-active-idle-timeout": u32 = 30000,
+
+/// Enable Smart Completions - intelligent TAB-triggered completions for CLI tools.
+/// Provides contextual suggestions for commands, flags, and arguments for 400+
+/// popular CLI tools including git, docker, kubectl, npm, cargo, and more.
+///
+/// When enabled, pressing the configured keybinding will show available
+/// completions based on the current command context.
+///
+/// Default: true
+@"ai-completions-enabled": bool = true,
+
+/// Maximum number of completion suggestions to show at once.
+///
+/// Default: 10
+@"ai-completions-max": u32 = 10,
+
 
 /// Sets the reporting format for OSC sequences that request color information.
 /// Ghostty currently supports OSC 10 (foreground), OSC 11 (background), and

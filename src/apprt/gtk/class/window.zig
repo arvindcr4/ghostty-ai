@@ -28,6 +28,8 @@ const Surface = @import("surface.zig").Surface;
 const Tab = @import("tab.zig").Tab;
 const DebugWarning = @import("debug_warning.zig").DebugWarning;
 const CommandPalette = @import("command_palette.zig").CommandPalette;
+const AiInputMode = @import("ai_input_mode.zig").AiInputMode;
+const AiCommandSearch = @import("ai_command_search.zig").AiCommandSearch;
 const WeakRef = @import("../weak_ref.zig").WeakRef;
 
 const log = std.log.scoped(.gtk_ghostty_window);
@@ -252,6 +254,12 @@ pub const Window = extern struct {
         /// A weak reference to a command palette.
         command_palette: WeakRef(CommandPalette) = .empty,
 
+        /// A weak reference to an AI input mode.
+        ai_input_mode: WeakRef(AiInputMode) = .empty,
+
+        /// A weak reference to an AI command search.
+        ai_command_search: WeakRef(AiCommandSearch) = .empty,
+
         // Template bindings
         tab_overview: *adw.TabOverview,
         tab_bar: *adw.TabBar,
@@ -347,6 +355,10 @@ pub const Window = extern struct {
             // TODO: accept the surface that toggled the command palette
             .init("toggle-command-palette", actionToggleCommandPalette, null),
             .init("toggle-inspector", actionToggleInspector, null),
+            // AI input mode for Warp-like AI assistance
+            .init("ai-input-mode", actionAiInputMode, null),
+            // AI command search (like Warp Terminal's '#' feature)
+            .init("ai-command-search", actionAiCommandSearch, null),
         };
 
         ext.actions.add(Self, self, &actions);
@@ -1151,6 +1163,7 @@ pub const Window = extern struct {
         const priv = self.private();
 
         priv.command_palette.set(null);
+        priv.ai_input_mode.set(null);
 
         if (priv.config) |v| {
             v.unref();
@@ -1933,6 +1946,96 @@ pub const Window = extern struct {
         self.toggleInspector();
     }
 
+    /// Toggle the AI input mode for Warp-like AI assistance.
+    fn toggleAiInputMode(self: *Window) void {
+        const priv = self.private();
+
+        // Get the selected text from the active surface, if any
+        const selected_text = blk: {
+            const surface = self.getActiveSurface() orelse break :blk null;
+            const core_surface = surface.core() orelse break :blk null;
+            if (!core_surface.hasSelection()) break :blk null;
+            break :blk core_surface.getSelectedText(Application.default().allocator()) catch null;
+        };
+        defer {
+            if (selected_text) |text| {
+                Application.default().allocator().free(text);
+            }
+        }
+
+        // Get terminal context if enabled
+        const terminal_context = blk: {
+            const surface = self.getActiveSurface() orelse break :blk null;
+            const core_surface = surface.core() orelse break :blk null;
+            const config = if (priv.config) |v| v.get() else break :blk null;
+
+            // Check if AI context awareness is enabled
+            if (!config.@"ai-context-aware") break :blk null;
+
+            // Get terminal history as context
+            const context_lines = config.@"ai-context-lines";
+            break :blk core_surface.getTerminalHistory(Application.default().allocator(), context_lines) catch null;
+        };
+        defer {
+            if (terminal_context) |ctx| {
+                Application.default().allocator().free(ctx);
+            }
+        }
+
+        // Get a reference to an AI input mode
+        const ai_mode = priv.ai_input_mode.get() orelse ai_mode: {
+            const config_obj = priv.config orelse return;
+
+            // Create a fresh AI input mode
+            const ai_mode = AiInputMode.new();
+            ai_mode.setConfig(config_obj);
+
+            break :ai_mode ai_mode;
+        };
+        defer ai_mode.unref();
+
+        // Show the AI input mode with the selected text and context
+        ai_mode.show(self, selected_text, terminal_context);
+    }
+
+    /// Toggle the AI command search (like Warp Terminal's '#' feature).
+    fn toggleAiCommandSearch(self: *Window) void {
+        const priv = self.private();
+
+        // Get a reference to an AI command search
+        const search = priv.ai_command_search.get() orelse search: {
+            const config_obj = priv.config orelse return;
+
+            // Create a fresh AI command search
+            const search = AiCommandSearch.new();
+            search.setConfig(config_obj);
+
+            break :search search;
+        };
+        defer search.unref();
+
+        // Show the AI command search
+        search.show(self);
+    }
+
+    /// React to a GTK action requesting that the AI input mode be toggled.
+    fn actionAiInputMode(
+        _: *gio.SimpleAction,
+        _: ?*glib.Variant,
+        self: *Window,
+    ) callconv(.c) void {
+        self.toggleAiInputMode();
+    }
+
+    /// React to a GTK action requesting that AI command search be shown.
+    fn actionAiCommandSearch(
+        _: *gio.SimpleAction,
+        _: ?*glib.Variant,
+        self: *Window,
+    ) callconv(.c) void {
+        self.toggleAiCommandSearch();
+    }
+
     const C = Common(Self, Private);
     pub const as = C.as;
     pub const ref = C.ref;
@@ -1949,6 +2052,8 @@ pub const Window = extern struct {
             gobject.ext.ensureType(SplitTree);
             gobject.ext.ensureType(Surface);
             gobject.ext.ensureType(Tab);
+            gobject.ext.ensureType(AiInputMode);
+            gobject.ext.ensureType(AiCommandSearch);
             gtk.Widget.Class.setTemplateFromResource(
                 class.as(gtk.Widget.Class),
                 comptime gresource.blueprint(.{
