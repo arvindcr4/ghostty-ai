@@ -1666,10 +1666,11 @@ pub const AiInputMode = extern struct {
             for (priv.current_suggestions.items) |suggestion| {
                 const row = gtk.ListBoxRow.new();
                 const box = gtk.Box.new(gtk.Orientation.vertical, 4);
-                box.setMarginTop(6);
-                box.setMarginBottom(6);
-                box.setMarginStart(12);
-                box.setMarginEnd(12);
+                const box_widget = box.as(gtk.Widget);
+                box_widget.setMarginTop(6);
+                box_widget.setMarginBottom(6);
+                box_widget.setMarginStart(12);
+                box_widget.setMarginEnd(12);
 
                 // Completion text
                 const completion_label = gtk.Label.new(suggestion.completion);

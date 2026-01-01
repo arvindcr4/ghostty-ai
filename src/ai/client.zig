@@ -110,27 +110,16 @@ pub const Client = struct {
     }
 
     /// Send a chat completion request
-    /// Note: HTTP client API needs Zig 0.15 compatibility update.
-    /// Currently returns a placeholder response.
     pub fn chat(
         self: *const Self,
         system_prompt: []const u8,
         user_prompt: []const u8,
     ) !ChatResponse {
-        _ = system_prompt;
-        _ = user_prompt;
-
-        // TODO: Fix Zig 0.15 HTTP client API compatibility
-        // The http.Client.fetch API changed in Zig 0.15
-        return .{
-            .content = try self.allocator.dupe(u8, "AI feature requires Zig 0.15 HTTP API update. This is a placeholder response."),
-            .model = try self.allocator.dupe(u8, self.model),
-            .provider = switch (self.provider) {
-                .openai => "openai",
-                .anthropic => "anthropic",
-                .ollama => "ollama",
-                .custom => "custom",
-            },
+        return switch (self.provider) {
+            .openai => try self.chatOpenAI(system_prompt, user_prompt),
+            .anthropic => try self.chatAnthropic(system_prompt, user_prompt),
+            .ollama => try self.chatOllama(system_prompt, user_prompt),
+            .custom => try self.chatCustom(system_prompt, user_prompt),
         };
     }
 
