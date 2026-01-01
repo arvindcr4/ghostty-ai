@@ -156,14 +156,14 @@ pub fn renderPassCreate(
 }
 
 /// Execute a render pass
-fn renderPass(self: *WebGL, pass: RenderPass) !void {
+fn renderPass(_: *WebGL, pass: RenderPass) !void {
     // TODO: Implement WebGL render pass execution
     // This will involve setting up shaders, uniforms, and draw calls
     _ = pass;
 }
 
 /// Set a uniform value
-pub fn uniformSet(self: *WebGL, uniform: RenderPass.Uniform) !void {
+pub fn uniformSet(_: *WebGL, uniform: RenderPass.Uniform) !void {
     // TODO: Implement WebGL uniform setting
     _ = uniform;
 }
@@ -195,7 +195,7 @@ pub fn health(self: *WebGL) rendererpkg.Health {
 }
 
 /// Get renderer information
-pub fn info(self: *WebGL) rendererpkg.Info {
+pub fn info(_: *WebGL) rendererpkg.Info {
     return .{
         .backend = .webgl,
         .version = "2.0",
