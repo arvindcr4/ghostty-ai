@@ -1,0 +1,121 @@
+using Gtk 4.0;
+using Gio 2.0;
+using Adw 1;
+
+Adw.Dialog dialog {
+  content-width: 800;
+  height: 500;
+  closed => $closed();
+
+  Adw.ToolbarView {
+    top-bar-style: raised;
+
+    [top]
+    Adw.HeaderBar {
+      title-widget: Adw.WindowTitle {
+        title: _("Blocks");
+        subtitle: _("Command blocks from shell integration");
+      };
+
+      [end]
+      Gtk.Button refresh_btn {
+        icon-name: "view-refresh-symbolic";
+        tooltip-text: _("Refresh");
+        clicked => $refresh_clicked();
+        styles ["flat"]
+      }
+
+      [end]
+      Gtk.Button close_btn {
+        icon-name: "window-close-symbolic";
+        tooltip-text: _("Close");
+        clicked => $close();
+        styles ["flat"]
+      }
+    }
+
+    Gtk.Box {
+      orientation: vertical;
+      spacing: 12;
+      margin-start: 12;
+      margin-end: 12;
+      margin-top: 12;
+      margin-bottom: 12;
+
+      Gtk.SearchEntry search_entry {
+        hexpand: true;
+        placeholder-text: _("Search blocks…");
+        search-changed => $search_changed();
+      }
+
+      Gtk.Box {
+        orientation: horizontal;
+        spacing: 8;
+
+        Gtk.ToggleButton input_toggle {
+          label: _("Input");
+          active: true;
+          toggled => $filter_toggled();
+        }
+
+        Gtk.ToggleButton output_toggle {
+          label: _("Output");
+          active: true;
+          toggled => $filter_toggled();
+        }
+      }
+
+      Gtk.ScrolledWindow {
+        vexpand: true;
+        min-content-height: 250;
+
+        Gtk.ListView list_view {
+          show-separators: true;
+          model: Gtk.SingleSelection selection {
+            model: Gio.ListStore list_store {
+              item-type: typeof<$GhosttyBlockItem>;
+            };
+          };
+
+          factory: Gtk.BuilderListItemFactory {
+            template Gtk.ListItem {
+              child: Gtk.Box {
+                orientation: vertical;
+                spacing: 4;
+                margin-start: 12;
+                margin-end: 12;
+                margin-top: 8;
+                margin-bottom: 8;
+
+                Gtk.Label {
+                  halign: start;
+                  xalign: 0;
+                  wrap: true;
+                  label: bind template.item as <$GhosttyBlockItem>.command;
+                  styles ["heading", "monospace"]
+                }
+
+                Gtk.Label {
+                  halign: start;
+                  xalign: 0;
+                  wrap: true;
+                  lines: 2;
+                  ellipsize: end;
+                  label: bind template.item as <$GhosttyBlockItem>.output-preview;
+                  styles ["dim-label", "caption"]
+                }
+              };
+            }
+          };
+        }
+      }
+
+      Gtk.Label empty_label {
+        label: _("No blocks match your search");
+        halign: center;
+        visible: false;
+        styles ["dim-label"]
+      }
+    }
+  }
+}

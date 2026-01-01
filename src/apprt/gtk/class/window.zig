@@ -30,6 +30,7 @@ const DebugWarning = @import("debug_warning.zig").DebugWarning;
 const CommandPalette = @import("command_palette.zig").CommandPalette;
 const AiInputMode = @import("ai_input_mode.zig").AiInputMode;
 const AiCommandSearch = @import("ai_command_search.zig").AiCommandSearch;
+const BlocksDialog = @import("blocks_dialog.zig").BlocksDialog;
 const WeakRef = @import("../weak_ref.zig").WeakRef;
 
 const log = std.log.scoped(.gtk_ghostty_window);
@@ -260,6 +261,9 @@ pub const Window = extern struct {
         /// A weak reference to an AI command search.
         ai_command_search: WeakRef(AiCommandSearch) = .empty,
 
+        /// A weak reference to the blocks dialog.
+        blocks_dialog: WeakRef(BlocksDialog) = .empty,
+
         // Template bindings
         tab_overview: *adw.TabOverview,
         tab_bar: *adw.TabBar,
@@ -355,6 +359,7 @@ pub const Window = extern struct {
             // TODO: accept the surface that toggled the command palette
             .init("toggle-command-palette", actionToggleCommandPalette, null),
             .init("toggle-inspector", actionToggleInspector, null),
+            .init("toggle-blocks", actionToggleBlocks, null),
             // AI input mode for Warp-like AI assistance
             .init("ai-input-mode", actionAiInputMode, null),
             // AI command search (like Warp Terminal's '#' feature)
@@ -1946,6 +1951,32 @@ pub const Window = extern struct {
         self.toggleInspector();
     }
 
+    /// Toggle the blocks panel for the active surface.
+    fn toggleBlocks(self: *Window) void {
+        const priv = self.private();
+        const core_surface = blk: {
+            const surface = self.getActiveSurface() orelse return;
+            break :blk surface.core() orelse return;
+        };
+
+        const dialog = priv.blocks_dialog.get() orelse dialog: {
+            const dialog = BlocksDialog.new();
+            priv.blocks_dialog.set(dialog);
+            break :dialog dialog;
+        };
+        defer dialog.unref();
+
+        dialog.show(self, core_surface);
+    }
+
+    fn actionToggleBlocks(
+        _: *gio.SimpleAction,
+        _: ?*glib.Variant,
+        self: *Window,
+    ) callconv(.c) void {
+        self.toggleBlocks();
+    }
+
     /// Toggle the AI input mode for Warp-like AI assistance.
     fn toggleAiInputMode(self: *Window) void {
         const priv = self.private();
@@ -2054,6 +2085,7 @@ pub const Window = extern struct {
             gobject.ext.ensureType(Tab);
             gobject.ext.ensureType(AiInputMode);
             gobject.ext.ensureType(AiCommandSearch);
+            gobject.ext.ensureType(BlocksDialog);
             gtk.Widget.Class.setTemplateFromResource(
                 class.as(gtk.Widget.Class),
                 comptime gresource.blueprint(.{

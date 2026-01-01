@@ -118,9 +118,6 @@ pub const Action = union(Key) {
     /// Open the AI command search dialog.
     ai_command_search,
 
-    /// Toggle the blocks panel.
-    toggle_blocks,
-
     /// Show smart completions for the current command.
     ai_completions,
 
@@ -340,6 +337,9 @@ pub const Action = union(Key) {
     /// The readonly state of the surface has changed.
     readonly: Readonly,
 
+    /// Toggle the blocks panel.
+    toggle_blocks,
+
     /// Sync with: ghostty_action_tag_e
     pub const Key = enum(c_int) {
         quit,
@@ -356,7 +356,6 @@ pub const Action = union(Key) {
         toggle_command_palette,
         ai_input_mode,
         ai_command_search,
-        toggle_blocks,
         ai_completions,
         toggle_visibility,
         toggle_background_opacity,
@@ -409,6 +408,7 @@ pub const Action = union(Key) {
         search_total,
         search_selected,
         readonly,
+        toggle_blocks,
     };
 
     /// Sync with: ghostty_action_u
