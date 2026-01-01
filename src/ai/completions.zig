@@ -270,8 +270,8 @@ pub const CompletionsService = struct {
         self: *const CompletionsService,
         command_line: []const u8,
         cursor_pos: usize,
-    ) !std.ArrayList(Completion) {
-        var completions = std.ArrayList(Completion).init(self.alloc);
+    ) !std.array_list.Managed(Completion) {
+        var completions = std.array_list.Managed(Completion).init(self.alloc);
         errdefer {
             for (completions.items) |*c| c.deinit(self.alloc);
             completions.deinit();
@@ -312,7 +312,7 @@ pub const CompletionsService = struct {
         tool: []const u8,
         subcommand: ?[]const u8,
         current_word: []const u8,
-        words: std.ArrayList([]const u8),
+        words: std.array_list.Managed([]const u8),
 
         fn deinit(self: *ParsedCommandLine, alloc: Allocator) void {
             for (self.words.items) |w| alloc.free(w);
@@ -323,7 +323,7 @@ pub const CompletionsService = struct {
     /// Parse the command line
     fn parseCommandLine(self: *const CompletionsService, line: []const u8, cursor_pos: usize) !ParsedCommandLine {
 
-        var words = std.ArrayList([]const u8).init(self.alloc);
+        var words = std.array_list.Managed([]const u8).init(self.alloc);
         errdefer {
             for (words.items) |w| self.alloc.free(w);
             words.deinit();
@@ -379,7 +379,7 @@ pub const CompletionsService = struct {
     /// Add flag completions
     fn addFlagCompletions(
         self: *const CompletionsService,
-        completions: *std.ArrayList(Completion),
+        completions: *std.array_list.Managed(Completion),
         spec: *const ToolSpec,
         parsed: ParsedCommandLine,
     ) !void {
@@ -411,7 +411,7 @@ pub const CompletionsService = struct {
     /// Add subcommand completions
     fn addSubcommandCompletions(
         self: *const CompletionsService,
-        completions: *std.ArrayList(Completion),
+        completions: *std.array_list.Managed(Completion),
         spec: *const ToolSpec,
         parsed: ParsedCommandLine,
     ) !void {
@@ -431,7 +431,7 @@ pub const CompletionsService = struct {
     /// Add argument completions (filenames, values, etc.)
     fn addArgumentCompletions(
         self: *const CompletionsService,
-        completions: *std.ArrayList(Completion),
+        completions: *std.array_list.Managed(Completion),
         spec: *const ToolSpec,
         parsed: ParsedCommandLine,
     ) !void {

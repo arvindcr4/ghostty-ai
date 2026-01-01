@@ -146,10 +146,10 @@ pub const Assistant = struct {
             try buf.appendSlice(redacted_context);
         }
 
-        return self.client.chat(
-            self.config.system_prompt,
-            try buf.toOwnedSlice(),
-        );
+        const full_prompt = try buf.toOwnedSlice();
+        defer self.alloc.free(full_prompt);
+
+        return self.client.chat(self.config.system_prompt, full_prompt);
     }
 
     /// Streaming process callback type
@@ -193,11 +193,10 @@ pub const Assistant = struct {
             try buf.appendSlice(redacted_context);
         }
 
-        return self.client.chatStream(
-            self.config.system_prompt,
-            try buf.toOwnedSlice(),
-            options,
-        );
+        const full_prompt = try buf.toOwnedSlice();
+        defer self.alloc.free(full_prompt);
+
+        return self.client.chatStream(self.config.system_prompt, full_prompt, options);
     }
 
     /// Check if AI is properly configured and ready

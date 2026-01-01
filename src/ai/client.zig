@@ -437,11 +437,112 @@ pub const Client = struct {
         user_prompt: []const u8,
         options: StreamOptions,
     ) !void {
-        // Zig 0.15 fetch() doesn't support streaming, fall back to non-streaming
-        // TODO: Implement true streaming with std.http.Connection when available
-        const response = try self.chatOpenAI(system_prompt, user_prompt);
-        defer response.deinit(self.allocator);
-        options.callback(.{ .content = response.content, .done = true });
+        const endpoint_str = if (self.endpoint.len > 0)
+            self.endpoint
+        else
+            "https://api.openai.com/v1/chat/completions";
+
+        var client: http.Client = .{ .allocator = self.allocator };
+        defer client.deinit();
+
+        const uri = try Uri.parse(endpoint_str);
+
+        // Enhance system prompt with shell-specific context
+        const enhanced_prompt = try self.enhanceSystemPrompt(system_prompt);
+        defer self.allocator.free(enhanced_prompt);
+
+        // Build request body with streaming enabled
+        const body = try self.buildOpenAIJsonStream(enhanced_prompt, user_prompt);
+        defer self.allocator.free(body);
+
+        // Build authorization header
+        const auth_header = try std.fmt.allocPrint(self.allocator, "Bearer {s}", .{self.api_key});
+        defer self.allocator.free(auth_header);
+
+        var req = try client.request(.POST, uri, .{
+            .headers = .{ .accept_encoding = .{ .override = "identity" } },
+            .extra_headers = &.{
+                .{ .name = "Authorization", .value = auth_header },
+                .{ .name = "Content-Type", .value = "application/json" },
+                .{ .name = "Accept", .value = "text/event-stream" },
+            },
+        });
+        defer req.deinit();
+
+        try req.sendBodyComplete(@constCast(body));
+
+        var response = try req.receiveHead(&.{});
+        if (response.head.status != .ok) {
+            log.err("OpenAI streaming returned status: {}", .{response.head.status});
+            options.callback(.{ .content = "", .done = true });
+            return error.InvalidResponse;
+        }
+
+        var transfer_buffer: [4096]u8 = undefined;
+        const body_reader = response.reader(&transfer_buffer);
+
+        var read_buf: [4096]u8 = undefined;
+        var sse_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer sse_buf.deinit(self.allocator);
+
+        while (true) {
+            if (isCancelled(options.cancelled)) {
+                options.callback(.{ .content = "", .done = true });
+                return;
+            }
+
+            const bytes_read = body_reader.readVec(&.{read_buf[0..]}) catch |err| switch (err) {
+                error.EndOfStream => break,
+                error.ReadFailed => {
+                    log.warn("OpenAI stream read error: {}", .{err});
+                    options.callback(.{ .content = "", .done = true });
+                    return;
+                },
+            };
+            if (bytes_read == 0) continue;
+
+            try sse_buf.appendSlice(self.allocator, read_buf[0..bytes_read]);
+
+            while (true) {
+                if (isCancelled(options.cancelled)) {
+                    options.callback(.{ .content = "", .done = true });
+                    return;
+                }
+
+                const delim = findSseDelimiter(sse_buf.items) orelse break;
+                const event = sse_buf.items[0..delim.index];
+
+                var lines = std.mem.splitScalar(u8, event, '\n');
+                while (lines.next()) |line_raw| {
+                    const line = std.mem.trimRight(u8, line_raw, "\r");
+                    if (!std.mem.startsWith(u8, line, "data:")) continue;
+
+                    const payload = std.mem.trim(u8, line["data:".len..], " \t\r");
+                    if (payload.len == 0) continue;
+
+                    if (std.mem.eql(u8, payload, "[DONE]")) {
+                        options.callback(.{ .content = "", .done = true });
+                        return;
+                    }
+
+                    const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch continue;
+                    defer parsed.deinit();
+
+                    const choices = parsed.value.object.get("choices") orelse continue;
+                    if (choices.array.items.len == 0) continue;
+                    const first_choice = choices.array.items[0];
+                    const delta = first_choice.object.get("delta") orelse continue;
+                    const content = delta.object.get("content") orelse continue;
+                    if (content != .string) continue;
+
+                    options.callback(.{ .content = content.string, .done = false });
+                }
+
+                consumePrefix(&sse_buf, delim.index + delim.len);
+            }
+        }
+
+        options.callback(.{ .content = "", .done = true });
     }
 
     fn buildAnthropicJsonStream(self: *const Self, system_prompt: []const u8, user_prompt: []const u8) ![]const u8 {
@@ -473,11 +574,115 @@ pub const Client = struct {
         user_prompt: []const u8,
         options: StreamOptions,
     ) !void {
-        // Zig 0.15 fetch() doesn't support streaming, fall back to non-streaming
-        // TODO: Implement true streaming with std.http.Connection when available
-        const response = try self.chatAnthropic(system_prompt, user_prompt);
-        defer response.deinit(self.allocator);
-        options.callback(.{ .content = response.content, .done = true });
+        const endpoint_str = if (self.endpoint.len > 0)
+            self.endpoint
+        else
+            "https://api.anthropic.com/v1/messages";
+
+        var client: http.Client = .{ .allocator = self.allocator };
+        defer client.deinit();
+
+        const uri = try Uri.parse(endpoint_str);
+
+        // Enhance system prompt with shell-specific context
+        const enhanced_prompt = try self.enhanceSystemPrompt(system_prompt);
+        defer self.allocator.free(enhanced_prompt);
+
+        // Build request body with streaming enabled
+        const body = try self.buildAnthropicJsonStream(enhanced_prompt, user_prompt);
+        defer self.allocator.free(body);
+
+        var req = try client.request(.POST, uri, .{
+            .headers = .{ .accept_encoding = .{ .override = "identity" } },
+            .extra_headers = &.{
+                .{ .name = "x-api-key", .value = self.api_key },
+                .{ .name = "anthropic-version", .value = "2023-06-01" },
+                .{ .name = "Content-Type", .value = "application/json" },
+                .{ .name = "Accept", .value = "text/event-stream" },
+            },
+        });
+        defer req.deinit();
+
+        try req.sendBodyComplete(@constCast(body));
+
+        var response = try req.receiveHead(&.{});
+        if (response.head.status != .ok) {
+            log.err("Anthropic streaming returned status: {}", .{response.head.status});
+            options.callback(.{ .content = "", .done = true });
+            return error.InvalidResponse;
+        }
+
+        var transfer_buffer: [4096]u8 = undefined;
+        const body_reader = response.reader(&transfer_buffer);
+
+        var read_buf: [4096]u8 = undefined;
+        var sse_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer sse_buf.deinit(self.allocator);
+
+        while (true) {
+            if (isCancelled(options.cancelled)) {
+                options.callback(.{ .content = "", .done = true });
+                return;
+            }
+
+            const bytes_read = body_reader.readVec(&.{read_buf[0..]}) catch |err| switch (err) {
+                error.EndOfStream => break,
+                error.ReadFailed => {
+                    log.warn("Anthropic stream read error: {}", .{err});
+                    options.callback(.{ .content = "", .done = true });
+                    return;
+                },
+            };
+            if (bytes_read == 0) continue;
+
+            try sse_buf.appendSlice(self.allocator, read_buf[0..bytes_read]);
+
+            while (true) {
+                if (isCancelled(options.cancelled)) {
+                    options.callback(.{ .content = "", .done = true });
+                    return;
+                }
+
+                const delim = findSseDelimiter(sse_buf.items) orelse break;
+                const event = sse_buf.items[0..delim.index];
+
+                var lines = std.mem.splitScalar(u8, event, '\n');
+                while (lines.next()) |line_raw| {
+                    const line = std.mem.trimRight(u8, line_raw, "\r");
+                    if (!std.mem.startsWith(u8, line, "data:")) continue;
+
+                    const payload = std.mem.trim(u8, line["data:".len..], " \t\r");
+                    if (payload.len == 0) continue;
+
+                    if (std.mem.eql(u8, payload, "event_done") or std.mem.eql(u8, payload, "[DONE]")) {
+                        options.callback(.{ .content = "", .done = true });
+                        return;
+                    }
+
+                    const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, payload, .{}) catch continue;
+                    defer parsed.deinit();
+
+                    const obj = parsed.value.object;
+                    const type_val = obj.get("type") orelse continue;
+                    if (type_val != .string) continue;
+
+                    if (std.mem.eql(u8, type_val.string, "content_block_delta")) {
+                        const delta_val = obj.get("delta") orelse continue;
+                        if (delta_val != .object) continue;
+                        const text_val = delta_val.object.get("text") orelse continue;
+                        if (text_val != .string) continue;
+                        options.callback(.{ .content = text_val.string, .done = false });
+                    } else if (std.mem.eql(u8, type_val.string, "message_stop")) {
+                        options.callback(.{ .content = "", .done = true });
+                        return;
+                    }
+                }
+
+                consumePrefix(&sse_buf, delim.index + delim.len);
+            }
+        }
+
+        options.callback(.{ .content = "", .done = true });
     }
 
     fn buildOllamaJsonStream(self: *const Self, system_prompt: []const u8, user_prompt: []const u8) ![]const u8 {
@@ -513,11 +718,112 @@ pub const Client = struct {
         user_prompt: []const u8,
         options: StreamOptions,
     ) !void {
-        // Zig 0.15 fetch() doesn't support streaming, fall back to non-streaming
-        // TODO: Implement true streaming with std.http.Connection when available
-        const response = try self.chatOllama(system_prompt, user_prompt);
-        defer response.deinit(self.allocator);
-        options.callback(.{ .content = response.content, .done = true });
+        const endpoint_str = if (self.endpoint.len > 0)
+            self.endpoint
+        else
+            "http://localhost:11434/api/chat";
+
+        var client: http.Client = .{ .allocator = self.allocator };
+        defer client.deinit();
+
+        const uri = try Uri.parse(endpoint_str);
+
+        // Enhance system prompt with shell-specific context
+        const enhanced_prompt = try self.enhanceSystemPrompt(system_prompt);
+        defer self.allocator.free(enhanced_prompt);
+
+        // Build request body with streaming enabled
+        const body = try self.buildOllamaJsonStream(enhanced_prompt, user_prompt);
+        defer self.allocator.free(body);
+
+        var req = try client.request(.POST, uri, .{
+            .headers = .{ .accept_encoding = .{ .override = "identity" } },
+            .extra_headers = &.{
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        });
+        defer req.deinit();
+
+        try req.sendBodyComplete(@constCast(body));
+
+        var response = try req.receiveHead(&.{});
+        if (response.head.status != .ok) {
+            log.err("Ollama streaming returned status: {}", .{response.head.status});
+            options.callback(.{ .content = "", .done = true });
+            return error.InvalidResponse;
+        }
+
+        var transfer_buffer: [4096]u8 = undefined;
+        const body_reader = response.reader(&transfer_buffer);
+
+        var read_buf: [4096]u8 = undefined;
+        var line_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer line_buf.deinit(self.allocator);
+
+        while (true) {
+            if (isCancelled(options.cancelled)) {
+                options.callback(.{ .content = "", .done = true });
+                return;
+            }
+
+            const bytes_read = body_reader.readVec(&.{read_buf[0..]}) catch |err| switch (err) {
+                error.EndOfStream => break,
+                error.ReadFailed => {
+                    log.warn("Ollama stream read error: {}", .{err});
+                    options.callback(.{ .content = "", .done = true });
+                    return;
+                },
+            };
+            if (bytes_read == 0) continue;
+
+            try line_buf.appendSlice(self.allocator, read_buf[0..bytes_read]);
+
+            while (true) {
+                const line_end = std.mem.indexOfScalar(u8, line_buf.items, '\n') orelse break;
+                const line_raw = std.mem.trimRight(u8, line_buf.items[0..line_end], "\r");
+                if (line_raw.len == 0) {
+                    consumePrefix(&line_buf, line_end + 1);
+                    continue;
+                }
+
+                const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, line_raw, .{}) catch {
+                    consumePrefix(&line_buf, line_end + 1);
+                    continue;
+                };
+                defer parsed.deinit();
+
+                const obj = parsed.value.object;
+                if (obj.get("done")) |done_val| {
+                    if (done_val == .bool and done_val.bool) {
+                        options.callback(.{ .content = "", .done = true });
+                        return;
+                    }
+                }
+
+                const message_val = obj.get("message") orelse {
+                    consumePrefix(&line_buf, line_end + 1);
+                    continue;
+                };
+                if (message_val != .object) {
+                    consumePrefix(&line_buf, line_end + 1);
+                    continue;
+                }
+
+                const content_val = message_val.object.get("content") orelse {
+                    consumePrefix(&line_buf, line_end + 1);
+                    continue;
+                };
+                if (content_val != .string) {
+                    consumePrefix(&line_buf, line_end + 1);
+                    continue;
+                }
+
+                options.callback(.{ .content = content_val.string, .done = false });
+                consumePrefix(&line_buf, line_end + 1);
+            }
+        }
+
+        options.callback(.{ .content = "", .done = true });
     }
 
     fn chatStreamCustom(

@@ -395,24 +395,39 @@ pub const AiInputMode = extern struct {
         // Insert action group into widget
         self.as(gtk.Widget).insertActionGroup("ai", action_group.as(gio.ActionGroup));
 
-        // Connect to text buffer changes for prompt suggestions
-        _ = priv.input_buffer.connectChanged(*Self, inputBufferChanged, self, .{});
+        // TODO: Prompt suggestions feature (incomplete)
+        // TODO: Connect to text buffer changes for prompt suggestions
+        // _ = priv.input_buffer.connectChanged(*Self, inputBufferChanged, self, .{});
+        // TODO: Create suggestion popup
+        // priv.suggestion_popup = gtk.Popover.new(priv.input_view.as(gtk.Widget));
+        // priv.suggestion_popup.?.setPosition(gtk.PositionType.top);
+        // TODO: Create suggestion list
+        // priv.suggestion_list = gtk.ListBox.new();
+        // priv.suggestion_list.?.setSelectionMode(gtk.SelectionMode.single);
+        // _ = priv.suggestion_list.?.connectRowActivated(*Self, suggestionRowActivated, self, .{});
+        // TODO: Add list to popup
+        // const scrolled = gtk.ScrolledWindow.new(null, null);
+        // scrolled.setPolicy(gtk.PolicyType.never, gtk.PolicyType.automatic);
+        // scrolled.setMaxContentHeight(200);
+        // scrolled.setChild(priv.suggestion_list.?.as(gtk.Widget));
+        // priv.suggestion_popup.?.setChild(scrolled.as(gtk.Widget));
+    }
 
-        // Create suggestion popup
-        priv.suggestion_popup = gtk.Popover.new(priv.input_view.as(gtk.Widget));
-        priv.suggestion_popup.?.setPosition(gtk.PositionType.top);
+    /// Called when the input buffer text changes - updates prompt suggestions
+    fn inputBufferChanged(buffer: *gtk.TextBuffer, self: *Self) callconv(.C) void {
+        _ = buffer;
+        _ = self;
+        // Prompt suggestion feature is disabled for now
+        // TODO: Implement prompt suggestions when the service is stable
+    }
 
-        // Create suggestion list
-        priv.suggestion_list = gtk.ListBox.new();
-        priv.suggestion_list.?.setSelectionMode(gtk.SelectionMode.single);
-        _ = priv.suggestion_list.?.connectRowActivated(*Self, suggestionRowActivated, self, .{});
-
-        // Add list to popup
-        const scrolled = gtk.ScrolledWindow.new(null, null);
-        scrolled.setPolicy(gtk.PolicyType.never, gtk.PolicyType.automatic);
-        scrolled.setMaxContentHeight(200);
-        scrolled.setChild(priv.suggestion_list.?.as(gtk.Widget));
-        priv.suggestion_popup.?.setChild(scrolled.as(gtk.Widget));
+    /// Called when a suggestion row is activated - inserts the suggestion
+    fn suggestionRowActivated(list: *gtk.ListBox, row: *gtk.ListBoxRow, self: *Self) callconv(.C) void {
+        _ = list;
+        _ = row;
+        _ = self;
+        // Prompt suggestion feature is disabled for now
+        // TODO: Implement suggestion insertion when the service is stable
     }
 
     fn agent_toggled(button: *gtk.ToggleButton, self: *Self) callconv(.C) void {
@@ -1592,5 +1607,148 @@ pub const AiInputMode = extern struct {
         }
 
         return result.toOwnedSliceSentinel(0);
+    }
+
+    /// Handle text buffer changes for prompt suggestions
+    fn inputBufferChanged(buffer: *gtk.TextBuffer, self: *Self) callconv(.C) void {
+        _ = buffer;
+        const priv = getPriv(self);
+        const alloc = Application.default().allocator();
+
+        // Get current text
+        const start: gtk.TextIter = undefined;
+        const end: gtk.TextIter = undefined;
+        priv.input_buffer.getBounds(&start, &end);
+        const text = priv.input_buffer.getText(&start, &end, false);
+
+        // Check if we should show suggestions
+        if (priv.prompt_suggestion_service) |*service| {
+            if (!service.shouldShowSuggestion(text, 2)) {
+                self.hideSuggestions();
+                return;
+            }
+
+            // Get suggestions
+            const suggestions = service.getSuggestions(text, priv.selected_text, priv.terminal_context) catch |err| {
+                log.err("Failed to get prompt suggestions: {}", .{err});
+                return;
+            };
+            defer {
+                for (suggestions.items) |*s| s.deinit(alloc);
+                suggestions.deinit();
+            }
+
+            // Show suggestions if we have any
+            if (suggestions.items.len > 0) {
+                self.showSuggestions(suggestions.items);
+            } else {
+                self.hideSuggestions();
+            }
+        }
+    }
+
+    /// Show suggestion popup with list of suggestions
+    fn showSuggestions(self: *Self, suggestions: []const PromptSuggestion) void {
+        const priv = getPriv(self);
+        const alloc = Application.default().allocator();
+
+        // Clear current suggestions
+        priv.current_suggestions.clearRetainingCapacity();
+        for (suggestions) |suggestion| {
+            // Copy suggestion to storage
+            const copied = PromptSuggestion{
+                .completion = alloc.dupe(u8, suggestion.completion) catch continue,
+                .description = alloc.dupe(u8, suggestion.description) catch continue,
+                .kind = suggestion.kind,
+                .confidence = suggestion.confidence,
+            };
+            priv.current_suggestions.append(copied) catch continue;
+        }
+
+        // Clear list
+        if (priv.suggestion_list) |list| {
+            var child = list.getFirstChild();
+            while (child) |c| {
+                const next = c.getNextSibling();
+                list.remove(c);
+                child = next;
+            }
+
+            // Add new suggestions
+            for (priv.current_suggestions.items) |suggestion| {
+                const row = gtk.ListBoxRow.new();
+                const box = gtk.Box.new(gtk.Orientation.vertical, 4);
+                box.setMarginTop(6);
+                box.setMarginBottom(6);
+                box.setMarginStart(12);
+                box.setMarginEnd(12);
+
+                // Completion text
+                const completion_label = gtk.Label.new(suggestion.completion);
+                completion_label.setXAlign(0);
+                completion_label.setUseMarkup(false);
+                completion_label.getStyleContext().addClass("heading");
+                box.append(completion_label.as(gtk.Widget));
+
+                // Description text
+                const desc_label = gtk.Label.new(suggestion.description);
+                desc_label.setXAlign(0);
+                desc_label.setUseMarkup(false);
+                desc_label.getStyleContext().addClass("dim-label");
+                desc_label.getStyleContext().addClass("caption");
+                box.append(desc_label.as(gtk.Widget));
+
+                row.setChild(box.as(gtk.Widget));
+                list.append(row.as(gtk.Widget));
+            }
+
+            // Show popup if hidden
+            if (priv.suggestion_popup) |popup| {
+                if (!popup.getVisible()) {
+                    popup.popup();
+                }
+            }
+        }
+    }
+
+    /// Hide suggestion popup
+    fn hideSuggestions(self: *Self) void {
+        const priv = getPriv(self);
+
+        // Clear current suggestions
+        for (priv.current_suggestions.items) |*suggestion| {
+            suggestion.deinit(Application.default().allocator());
+        }
+        priv.current_suggestions.clearRetainingCapacity();
+
+        // Hide popup
+        if (priv.suggestion_popup) |popup| {
+            popup.popdown();
+        }
+    }
+
+    /// Handle suggestion selection
+    fn suggestionRowActivated(list: *gtk.ListBox, row: *gtk.ListBoxRow, self: *Self) callconv(.C) void {
+        _ = list;
+        const priv = getPriv(self);
+        const alloc = Application.default().allocator();
+
+        // Get selected index
+        const index = row.getIndex();
+        if (index < 0 or index >= @as(c_int, @intCast(priv.current_suggestions.items.len))) return;
+
+        const suggestion = priv.current_suggestions.items[@intCast(index)];
+
+        // Insert suggestion into input buffer
+        const start: gtk.TextIter = undefined;
+        const end: gtk.TextIter = undefined;
+        priv.input_buffer.getBounds(&start, &end);
+        priv.input_buffer.delete(&start, &end);
+        priv.input_buffer.insert(&start, suggestion.completion, -1);
+
+        // Hide suggestions
+        self.hideSuggestions();
+
+        log.info("Applied prompt suggestion: {}", .{suggestion.completion});
     }
 };
