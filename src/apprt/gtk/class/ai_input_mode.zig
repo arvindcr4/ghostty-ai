@@ -594,6 +594,24 @@ pub const AiInputMode = extern struct {
             priv.command_analysis_dialog = null;
         }
 
+        // Clean up tab completion overlay if created
+        if (priv.tab_completion_overlay) |overlay| {
+            overlay.unref();
+            priv.tab_completion_overlay = null;
+        }
+
+        // Clean up inline explanation tooltip if created
+        if (priv.inline_explanation_tooltip) |tooltip| {
+            tooltip.unref();
+            priv.inline_explanation_tooltip = null;
+        }
+
+        // Clean up performance analytics dialog if created
+        if (priv.performance_analytics_dialog) |dialog| {
+            dialog.unref();
+            priv.performance_analytics_dialog = null;
+        }
+
         gtk.Widget.disposeTemplate(self.as(gtk.Widget), getGObjectType());
 
         gobject.Object.virtual_methods.dispose.call(Class.parent, self.as(Parent));
@@ -2532,6 +2550,20 @@ pub const AiInputMode = extern struct {
         const dialog = priv.command_analysis_dialog orelse blk: {
             const new_dialog = CommandAnalysisDialog.new();
             priv.command_analysis_dialog = new_dialog;
+            break :blk new_dialog;
+        };
+        dialog.show(win);
+    }
+
+    fn showPerformanceAnalytics(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const win = priv.window orelse return;
+        const dialog = priv.performance_analytics_dialog orelse blk: {
+            const new_dialog = PerformanceAnalyticsDialog.new();
+            priv.performance_analytics_dialog = new_dialog;
             break :blk new_dialog;
         };
         dialog.show(win);

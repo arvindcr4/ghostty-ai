@@ -112,7 +112,7 @@ pub const PerformanceAnalyticsDialog = extern struct {
 
         const page = adw.PreferencesPage.new();
         page.setTitle("Command Performance");
-        page.setIconName="system-run-symbolic";
+        page.setIconName("system-run-symbolic");
 
         // Statistics summary
         const stats_group = adw.PreferencesGroup.new();
@@ -127,7 +127,7 @@ pub const PerformanceAnalyticsDialog = extern struct {
 
         const refresh_btn = gtk.Button.new();
         refresh_btn.setLabel("Refresh Data");
-        refresh_btn.setIconName="view-refresh-symbolic";
+        refresh_btn.setIconName("view-refresh-symbolic");
         priv.refresh_btn = refresh_btn;
         _ = refresh_btn.connectClicked(&refreshData, self);
         stats_group.add(refresh_btn.as(gtk.Widget));
