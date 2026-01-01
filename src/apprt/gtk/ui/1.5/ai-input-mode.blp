@@ -93,6 +93,12 @@ Adw.Dialog dialog {
                 attribute icon: "preferences-system-symbolic";
                 action: "ai.show-settings";
               }
+              item {
+                attribute name: "shortcuts";
+                attribute label: _("Keyboard Shortcuts");
+                attribute icon: "preferences-desktop-keyboard-symbolic";
+                action: "ai.show-shortcuts";
+              }
             }
           }
         }
@@ -321,18 +327,23 @@ Adw.Dialog dialog {
           styles ["ai-input-view", "card"]
         }
 
-        Gtk.ScrolledWindow scrolled {
-          min-content-height: 150;
+        Gtk.Box response_container {
+          orientation: horizontal;
           vexpand: true;
 
-          Gtk.ListView response_view {
-            single-click-activate: false;
-            visible: false;
-            model: Gtk.SingleSelection response_model {
-              model: Gio.ListStore response_store {
-                item-type: typeof<$AiResponseItem>;
+          Gtk.ScrolledWindow scrolled {
+            min-content-height: 150;
+            vexpand: true;
+            hexpand: true;
+
+            Gtk.ListView response_view {
+              single-click-activate: false;
+              visible: false;
+              model: Gtk.SingleSelection response_model {
+                model: Gio.ListStore response_store {
+                  item-type: typeof<$AiResponseItem>;
+                };
               };
-            };
 
             factory: Gtk.BuilderListItemFactory {
               template Gtk.ListItem {

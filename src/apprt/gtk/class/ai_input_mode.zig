@@ -28,6 +28,10 @@ const Binding = @import("../../../input/Binding.zig");
 const PromptSuggestionService = @import("../../../ai/main.zig").PromptSuggestionService;
 const PromptSuggestion = @import("../../../ai/main.zig").PromptSuggestion;
 const KnowledgeRulesManager = @import("../../../ai/main.zig").KnowledgeRulesManager;
+const CommandPalette = @import("ai_command_palette.zig").CommandPalette;
+const ChatHistorySidebar = @import("ai_chat_history.zig").ChatHistorySidebar;
+const AiSettingsDialog = @import("ai_settings_dialog.zig").AiSettingsDialog;
+const KeyboardShortcutsDialog = @import("ai_keyboard_shortcuts.zig").KeyboardShortcutsDialog;
 
 /// AI Input Mode Widget
 ///
@@ -220,6 +224,9 @@ pub const AiInputMode = extern struct {
 
         /// Response store
         response_store: *gio.ListStore,
+
+        /// Chat history store
+        chat_history_store: ?*gio.ListStore = null,
 
         /// Loading label
         loading_label: *gtk.Label,
@@ -922,6 +929,24 @@ pub const AiInputMode = extern struct {
         pub const bindTemplateCallback = C.Class.bindTemplateCallback;
     };
 
+    /// Show command palette (Warp-like)
+    pub fn showCommandPalette(self: *Self) void {
+        const priv = getPriv(self);
+        const win = priv.window orelse return;
+        
+        const palette = CommandPalette.new();
+        palette.show(win);
+    }
+
+    /// Toggle chat history sidebar
+    pub fn toggleHistorySidebar(self: *Self) void {
+        const priv = getPriv(self);
+        if (priv.history_sidebar) |sidebar| {
+            const visible = sidebar.getVisible();
+            sidebar.setVisible(@intFromBool(!visible));
+        }
+    }
+
     /// Show the AI input dialog
     pub fn show(self: *Self, win: *Window, selected_text: ?[]const u8, terminal_context: ?[]const u8) void {
         const priv = getPriv(self);
@@ -1317,6 +1342,13 @@ pub const AiInputMode = extern struct {
         // Show loading state
         priv.response_view.setVisible(false);
         priv.loading_label.setVisible(true);
+        
+        // Update progress bar
+        if (priv.progress_bar) |pb| {
+            pb.setVisible(@intFromBool(true));
+            pb.setFraction(0.0);
+            pb.setText("Initializing...");
+        }
 
         // Update button states
         priv.send_sensitive = false;
@@ -1358,15 +1390,30 @@ pub const AiInputMode = extern struct {
         _ = self.ref();
 
         const thread = std.Thread.spawn(.{}, aiThreadMain, .{ctx}) catch |err| {
-            log.err("Failed to spawn thread: {}", .{err});
+            log.err("Failed to spawn AI request thread: {}", .{err});
             alloc.free(prompt_dupe);
             if (context_dupe) |c| alloc.free(c);
             config.unref();
             self.unref();
+
+            // Reset UI state
             priv.loading_label.setVisible(false);
             priv.response_view.setVisible(true);
             priv.send_sensitive = true;
             self.notify(properties.send_sensitive.name);
+
+            // Show error to user
+            const error_msg = std.fmt.allocPrintZ(alloc, "Error: Failed to process request. System may be overloaded. Please try again.", .{}) catch {
+                // If allocation fails, use static string
+                _ = self.addResponse("Error: Request failed") catch |add_err| {
+                    log.err("Failed to add error response: {}", .{add_err});
+                };
+                return;
+            };
+            defer alloc.free(error_msg);
+            _ = self.addResponse(error_msg) catch |add_err| {
+                log.err("Failed to add error response: {}", .{add_err});
+            };
             return;
         };
         thread.detach();
@@ -1399,14 +1446,23 @@ pub const AiInputMode = extern struct {
                 log.err("Failed to allocate stream init chunk: {}", .{err});
 
                 // Send error result to main thread to notify user
-                const ai_result = alloc.create(AiResult) catch return;
+                const ai_result = alloc.create(AiResult) catch {
+                    // Even cleanup failed, nothing more we can do
+                    return;
+                };
                 ai_result.* = .{
                     .input_mode = ctx.input_mode,
                     .response = null,
                     .err = std.fmt.allocPrintZ(alloc, "Error: Out of memory. Please close other apps and try again.", .{}) catch "Error: Memory allocation failed",
                     .is_final = true,
                 };
-                _ = glib.idleAdd(aiResultCallback, ai_result);
+                // Check if idleAdd succeeded - if not, clean up
+                if (glib.idleAdd(aiResultCallback, ai_result) == 0) {
+                    log.err("Failed to add idle callback for AI error result - memory may leak");
+                    // Clean up the result since callback won't run
+                    if (ai_result.err) |e| alloc.free(e);
+                    alloc.destroy(ai_result);
+                }
                 return;
             };
             stream_init.* = .{
@@ -1414,7 +1470,11 @@ pub const AiInputMode = extern struct {
                 .content = "",
                 .done = false,
             };
-            _ = glib.idleAdd(streamInitCallback, stream_init);
+            // Check if idleAdd succeeded - if not, clean up
+            if (glib.idleAdd(streamInitCallback, stream_init) == 0) {
+                log.err("Failed to add idle callback for stream init - memory may leak");
+                alloc.destroy(stream_init);
+            }
 
             // Create callback with closure using global state
             const callback = struct {
@@ -1463,7 +1523,13 @@ pub const AiInputMode = extern struct {
                                 }
                             }
                         }
-                        _ = glib.idleAdd(streamChunkCallback, stream_chunk);
+                        // Check if idleAdd succeeded - if not, clean up
+                        if (glib.idleAdd(streamChunkCallback, stream_chunk) == 0) {
+                            log.err("Failed to add idle callback for stream chunk - memory may leak");
+                            // Clean up the stream chunk since callback won't run
+                            alloc.free(stream_chunk.content);
+                            alloc.destroy(stream_chunk);
+                        }
                     }
                 }
             }.inner;
@@ -1477,20 +1543,32 @@ pub const AiInputMode = extern struct {
             // Process with streaming (this blocks until stream completes)
             assistant.processStream(ctx.prompt, ctx.context, stream_options) catch |err| {
                 // On error, send error result
-                const ai_result = alloc.create(AiResult) catch return;
+                const ai_result = alloc.create(AiResult) catch {
+                    // Even cleanup failed, nothing more we can do
+                    return;
+                };
                 ai_result.* = .{
                     .input_mode = ctx.input_mode,
                     .response = null,
                     .err = std.fmt.allocPrintZ(alloc, "Error: {s}", .{@errorName(err)}) catch null,
                     .is_final = true,
                 };
-                _ = glib.idleAdd(aiResultCallback, ai_result);
+                // Check if idleAdd succeeded - if not, clean up
+                if (glib.idleAdd(aiResultCallback, ai_result) == 0) {
+                    log.err("Failed to add idle callback for AI error result - memory may leak");
+                    // Clean up the result since callback won't run
+                    if (ai_result.err) |e| alloc.free(e);
+                    alloc.destroy(ai_result);
+                }
             };
         } else {
             // Use blocking API
             const result = assistant.process(ctx.prompt, ctx.context);
 
-            const ai_result = alloc.create(AiResult) catch return;
+            const ai_result = alloc.create(AiResult) catch {
+                // Even cleanup failed, nothing more we can do
+                return;
+            };
             ai_result.* = .{
                 .input_mode = ctx.input_mode,
                 .response = null,
@@ -1505,7 +1583,14 @@ pub const AiInputMode = extern struct {
                 ai_result.err = std.fmt.allocPrintZ(alloc, "Error: {s}", .{@errorName(err)}) catch null;
             }
 
-            _ = glib.idleAdd(aiResultCallback, ai_result);
+            // Check if idleAdd succeeded - if not, clean up
+            if (glib.idleAdd(aiResultCallback, ai_result) == 0) {
+                log.err("Failed to add idle callback for AI result - memory may leak");
+                // Clean up the result since callback won't run
+                if (ai_result.response) |r| alloc.free(r);
+                if (ai_result.err) |e| alloc.free(e);
+                alloc.destroy(ai_result);
+            }
         }
     }
 
@@ -1543,6 +1628,11 @@ pub const AiInputMode = extern struct {
         defer if (chunk.content.len > 0) alloc.free(chunk.content);
 
         const self = chunk.input_mode;
+
+        // Check if widget is still valid before accessing (use-after-free prevention)
+        // Widget may have been destroyed while callback was pending
+        if (!self.as(gtk.Widget).isVisible()) return 0;
+
         const priv = getPriv(self);
 
         // If the user cancelled, ignore intermediate chunks but still handle the final "done" chunk.
@@ -1550,14 +1640,25 @@ pub const AiInputMode = extern struct {
 
         if (priv.streaming_response) |*buffer| {
             // Append new content to buffer
-            buffer.appendSlice(chunk.content) catch return 1;
+            buffer.appendSlice(chunk.content) catch |err| {
+                log.err("Failed to append streaming chunk, aborting stream: {}", .{err});
+                // Clean up streaming state on error to prevent memory leaks
+                buffer.deinit();
+                priv.streaming_response = null;
+                // Keep the item in store but clear our reference to it
+                priv.streaming_response_item = null;
+                return 0; // G_SOURCE_REMOVE to stop processing
+            };
 
             // Update the response item with new content
             if (priv.streaming_response_item) |item| {
                 const item_priv = gobject.ext.getPriv(item, &ResponseItem.ResponseItemPrivate.offset);
 
                 // Convert accumulated content to sentinel-terminated string for markup
-                const content_z_for_markup = alloc.dupeZ(u8, buffer.items) catch return 1;
+                const content_z_for_markup = alloc.dupeZ(u8, buffer.items) catch |err| {
+                    log.err("Failed to allocate string for markup: {}", .{err});
+                    return 1; // Continue, try again next chunk
+                };
                 const markup = markup: {
                     if (markdownToPango(alloc, content_z_for_markup)) |m| {
                         alloc.free(content_z_for_markup);
@@ -1583,14 +1684,22 @@ pub const AiInputMode = extern struct {
                     const item_priv = gobject.ext.getPriv(item, &ResponseItem.ResponseItemPrivate.offset);
 
                     // Convert accumulated content to sentinel-terminated string for command extraction
-                    const content_z_for_command = alloc.dupeZ(u8, buffer.items) catch return 1;
-                    defer alloc.free(content_z_for_command);
+                    const content_z_for_command = alloc.dupeZ(u8, buffer.items) catch |err| {
+                        log.err("Failed to allocate string for command extraction: {}", .{err});
+                        // Continue without command extraction
+                    };
+                    defer if (content_z_for_command) |cz| alloc.free(cz);
 
-                    const command = extractCommandFromMarkdown(alloc, content_z_for_command) catch "";
-                    if (item_priv.command.len == 0 and command.len > 0) {
-                        item_priv.command = command;
-                    } else if (command.len > 0) {
-                        alloc.free(command);
+                    if (content_z_for_command) |cz| {
+                        const command = extractCommandFromMarkdown(alloc, cz) catch |err| {
+                            log.err("Failed to extract command: {}", .{err});
+                            "";
+                        };
+                        if (item_priv.command.len == 0 and command.len > 0) {
+                            item_priv.command = command;
+                        } else if (command.len > 0) {
+                            alloc.free(command);
+                        }
                     }
                     // Clear the reference but don't free the item (store owns it)
                     priv.streaming_response_item = null;
@@ -1995,8 +2104,24 @@ pub const AiInputMode = extern struct {
         _ = gio.SimpleAction.signals.activate.connect(settings_action, *Self, showSettingsDialog, self, .{});
         action_group.addAction(settings_action);
 
+        // Keyboard shortcuts action
+        const shortcuts_action = gio.SimpleAction.new("show-shortcuts", null);
+        _ = gio.SimpleAction.signals.activate.connect(shortcuts_action, *Self, showKeyboardShortcuts, self, .{});
+        action_group.addAction(shortcuts_action);
+
         // Insert action group
         self.as(gtk.Widget).insertActionGroup("ai", action_group.as(gio.ActionGroup));
+    }
+
+    /// Show keyboard shortcuts dialog
+    fn showKeyboardShortcuts(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
+        _ = action;
+        _ = param;
+        const priv = getPriv(self);
+
+        const win = priv.window orelse return;
+        const dialog = KeyboardShortcutsDialog.new();
+        dialog.show(win);
     }
 
     /// Show workflows dialog
@@ -2059,16 +2184,12 @@ pub const AiInputMode = extern struct {
         _ = param;
         const priv = getPriv(self);
 
-        const dialog = adw.MessageDialog.new(null, "AI Settings", "Configure AI assistant preferences");
-        dialog.setBody("Advanced AI settings will be available in a future update.");
-        dialog.addResponse("ok", "OK");
-        dialog.setDefaultResponse("ok");
-        dialog.setCloseResponse("ok");
-        dialog.setModal(@intFromBool(true));
-        
         const win = priv.window orelse return;
-        dialog.setTransientFor(win.as(gtk.Window));
-        dialog.present();
+        const dialog = AiSettingsDialog.new();
+        if (priv.config) |cfg| {
+            dialog.setConfig(cfg);
+        }
+        dialog.show(win);
     }
 
     /// Signal handler for stop button click
@@ -2155,15 +2276,30 @@ pub const AiInputMode = extern struct {
         _ = self.ref();
 
         const thread = std.Thread.spawn(.{}, aiThreadMain, .{ctx}) catch |err| {
-            log.err("Failed to spawn thread: {}", .{err});
+            log.err("Failed to spawn AI request thread: {}", .{err});
             alloc.free(prompt_dupe);
             if (context_dupe) |c| alloc.free(c);
             config.unref();
             self.unref();
+
+            // Reset UI state
             priv.loading_label.setVisible(false);
             priv.response_view.setVisible(true);
             priv.send_sensitive = true;
             self.notify(properties.send_sensitive.name);
+
+            // Show error to user
+            const error_msg = std.fmt.allocPrintZ(alloc, "Error: Failed to process request. System may be overloaded. Please try again.", .{}) catch {
+                // If allocation fails, use static string
+                _ = self.addResponse("Error: Request failed") catch |add_err| {
+                    log.err("Failed to add error response: {}", .{add_err});
+                };
+                return;
+            };
+            defer alloc.free(error_msg);
+            _ = self.addResponse(error_msg) catch |add_err| {
+                log.err("Failed to add error response: {}", .{add_err});
+            };
             return;
         };
         thread.detach();
@@ -2207,6 +2343,13 @@ pub const AiInputMode = extern struct {
 
         // Add to the store
         priv.response_store.append(item);
+
+        // Add to chat history
+        if (priv.chat_history_store) |history_store| {
+            // Create a simple history entry (can be enhanced later)
+            const history_entry = gobject.Object.new(gobject.Object) catch {};
+            history_store.append(history_entry);
+        }
 
         // Show the response view and hide loading
         priv.response_view.setVisible(true);

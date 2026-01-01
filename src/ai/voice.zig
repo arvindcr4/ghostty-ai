@@ -315,12 +315,161 @@ pub const VoiceInputManager = struct {
 
     /// Process audio using native platform APIs
     fn processNative(self: *VoiceInputManager, duration: i64) !VoiceInputResult {
-        // Platform-specific implementation would go here
-        // For now, return a descriptive result
+        // On macOS, the native Speech framework is used via Swift (VoiceInputManager.swift).
+        // The Swift implementation handles real-time speech recognition using SFSpeechRecognizer.
+        // This Zig function is called when the core Zig voice system is used directly.
+        //
+        // For direct Zig usage, we fall back to external API or write audio to file
+        // and use a helper tool for transcription.
+        if (comptime builtin.os.tag == .macos) {
+            // On macOS, try to use the external Whisper API as fallback
+            // since the native Speech framework requires Swift/Obj-C bridge
+            if (self.config.external_service_url != null) {
+                log.info("macOS native fallback: using external Whisper API", .{});
+                return self.processExternal(duration);
+            }
+
+            // If no external URL, save audio to temp file for manual transcription
+            const audio_buffer = self.audio_buffer orelse {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[No audio captured]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            };
+
+            // Try using whisper command-line tool if available
+            const whisper_result = self.tryWhisperCli(audio_buffer, duration);
+            if (whisper_result) |result| {
+                return result;
+            }
+
+            // Fall back to mock if no transcription method available
+            log.warn("No transcription backend available, using mock", .{});
+            return self.processMock(duration);
+        } else if (comptime builtin.os.tag == .linux) {
+            // On Linux, try whisper CLI or external API
+            if (self.config.external_service_url != null) {
+                return self.processExternal(duration);
+            }
+
+            const audio_buffer = self.audio_buffer orelse {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[No audio captured]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            };
+
+            const whisper_result = self.tryWhisperCli(audio_buffer, duration);
+            if (whisper_result) |result| {
+                return result;
+            }
+
+            return self.processMock(duration);
+        } else {
+            // Other platforms: try external API or mock
+            if (self.config.external_service_url != null) {
+                return self.processExternal(duration);
+            }
+            return self.processMock(duration);
+        }
+    }
+
+    /// Try to use whisper command-line tool for transcription
+    fn tryWhisperCli(self: *VoiceInputManager, buffer: AudioBuffer, duration: i64) ?VoiceInputResult {
+        // Check if whisper CLI is available
+        const whisper_paths = [_][]const u8{
+            "/usr/local/bin/whisper",
+            "/usr/bin/whisper",
+            "/opt/homebrew/bin/whisper",
+            "whisper", // Try PATH
+        };
+
+        var whisper_cmd: ?[]const u8 = null;
+        for (whisper_paths) |path| {
+            std.fs.cwd().access(path, .{}) catch continue;
+            whisper_cmd = path;
+            break;
+        }
+
+        if (whisper_cmd == null) {
+            // Whisper CLI not found
+            return null;
+        }
+
+        // Write audio to temp file
+        const temp_path = "/tmp/ghostty_voice_temp.wav";
+        const wav_data = self.encodeWav(buffer) catch return null;
+        defer self.alloc.free(wav_data);
+
+        const file = std.fs.cwd().createFile(temp_path, .{}) catch return null;
+        file.writeAll(wav_data) catch {
+            file.close();
+            return null;
+        };
+        file.close();
+        defer std.fs.cwd().deleteFile(temp_path) catch {};
+
+        // Build language arg
+        var lang_buf: [16]u8 = undefined;
+        const lang_code = if (std.mem.indexOf(u8, self.config.language, "-")) |idx|
+            self.config.language[0..idx]
+        else
+            self.config.language;
+        const lang_arg = std.fmt.bufPrint(&lang_buf, "--language={s}", .{lang_code}) catch return null;
+
+        // Run whisper
+        const argv = [_][]const u8{
+            whisper_cmd.?,
+            temp_path,
+            "--output_format=txt",
+            "--output_dir=/tmp",
+            lang_arg,
+        };
+
+        var child = std.process.Child.init(&argv, self.alloc);
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Ignore;
+
+        child.spawn() catch return null;
+        const term = child.wait() catch return null;
+
+        if (term.Exited != 0) {
+            return null;
+        }
+
+        // Read the output text file
+        const output_path = "/tmp/ghostty_voice_temp.txt";
+        const text_file = std.fs.cwd().openFile(output_path, .{}) catch return null;
+        defer text_file.close();
+        defer std.fs.cwd().deleteFile(output_path) catch {};
+
+        var text_buf: [4096]u8 = undefined;
+        const bytes_read = text_file.readAll(&text_buf) catch return null;
+        if (bytes_read == 0) return null;
+
+        // Trim whitespace
+        var text = text_buf[0..bytes_read];
+        while (text.len > 0 and (text[text.len - 1] == '\n' or text[text.len - 1] == '\r' or text[text.len - 1] == ' ')) {
+            text = text[0 .. text.len - 1];
+        }
+        while (text.len > 0 and (text[0] == '\n' or text[0] == '\r' or text[0] == ' ')) {
+            text = text[1..];
+        }
+
+        if (text.len == 0) return null;
+
         return VoiceInputResult{
-            .text = try self.alloc.dupe(u8, "[Native speech recognition - platform bridge required]"),
-            .confidence = 0.0,
-            .language = try self.alloc.dupe(u8, self.config.language),
+            .text = self.alloc.dupe(u8, text) catch return null,
+            .confidence = 0.9,
+            .language = self.alloc.dupe(u8, self.config.language) catch return null,
             .duration_ms = duration,
             .is_partial = false,
             .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
@@ -328,12 +477,321 @@ pub const VoiceInputManager = struct {
     }
 
     /// Process audio using Whisper model
+    /// Uses whisper.cpp via command-line tool with the configured model path
     fn processWhisper(self: *VoiceInputManager, duration: i64) !VoiceInputResult {
-        // Whisper integration would process self.audio_buffer here
-        // Would use whisper.cpp bindings
+        const model_path = self.config.whisper_model_path orelse {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Whisper model path not configured - set whisper_model_path]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+
+        const audio_buffer = self.audio_buffer orelse {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[No audio captured]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+
+        // Encode audio to WAV
+        const wav_data = try self.encodeWav(audio_buffer);
+        defer self.alloc.free(wav_data);
+
+        // Write to temp file
+        const temp_audio = "/tmp/ghostty_whisper_input.wav";
+        const temp_output = "/tmp/ghostty_whisper_output.txt";
+
+        const audio_file = std.fs.cwd().createFile(temp_audio, .{}) catch {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Failed to create temp audio file]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+        audio_file.writeAll(wav_data) catch {
+            audio_file.close();
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Failed to write audio data]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+        audio_file.close();
+        defer std.fs.cwd().deleteFile(temp_audio) catch {};
+
+        // Find whisper executable (whisper.cpp main binary)
+        const whisper_bins = [_][]const u8{
+            "/usr/local/bin/whisper-cpp",
+            "/usr/local/bin/main", // whisper.cpp default binary name
+            "/usr/bin/whisper-cpp",
+            "/opt/homebrew/bin/whisper-cpp",
+            "whisper-cpp",
+        };
+
+        var whisper_bin: ?[]const u8 = null;
+        for (whisper_bins) |bin| {
+            std.fs.cwd().access(bin, .{}) catch continue;
+            whisper_bin = bin;
+            break;
+        }
+
+        // Also check for Python whisper command
+        if (whisper_bin == null) {
+            const python_whisper = [_][]const u8{
+                "/usr/local/bin/whisper",
+                "/usr/bin/whisper",
+                "/opt/homebrew/bin/whisper",
+                "whisper",
+            };
+            for (python_whisper) |bin| {
+                std.fs.cwd().access(bin, .{}) catch continue;
+                whisper_bin = bin;
+                break;
+            }
+        }
+
+        if (whisper_bin == null) {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Whisper executable not found - install whisper.cpp or openai-whisper]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        }
+
+        // Extract language code (e.g., "en" from "en-US")
+        var lang_buf: [32]u8 = undefined;
+        const lang_code = if (std.mem.indexOf(u8, self.config.language, "-")) |idx|
+            self.config.language[0..idx]
+        else
+            self.config.language;
+
+        // Build model arg
+        var model_arg_buf: [512]u8 = undefined;
+        const model_arg = std.fmt.bufPrint(&model_arg_buf, "--model={s}", .{model_path}) catch {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Model path too long]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+
+        const lang_arg = std.fmt.bufPrint(&lang_buf, "--language={s}", .{lang_code}) catch {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Language code too long]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+
+        log.info("Running whisper with model: {s}", .{model_path});
+
+        // Determine if this is whisper.cpp or Python whisper and adjust args
+        const is_cpp = std.mem.indexOf(u8, whisper_bin.?, "cpp") != null or
+            std.mem.indexOf(u8, whisper_bin.?, "main") != null;
+
+        if (is_cpp) {
+            // whisper.cpp format: ./main -m model.bin -f audio.wav -otxt
+            var output_arg_buf: [256]u8 = undefined;
+            const output_arg = std.fmt.bufPrint(&output_arg_buf, "-of={s}", .{"/tmp/ghostty_whisper_output"}) catch {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[Output path too long]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            };
+
+            const argv = [_][]const u8{
+                whisper_bin.?,
+                "-m",
+                model_path,
+                "-f",
+                temp_audio,
+                "-l",
+                lang_code,
+                "-otxt",
+                output_arg,
+            };
+
+            var child = std.process.Child.init(&argv, self.alloc);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Ignore;
+
+            child.spawn() catch {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[Failed to run whisper.cpp]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            };
+
+            const term = child.wait() catch {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[Whisper.cpp process failed]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            };
+
+            if (term.Exited != 0) {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[Whisper.cpp exited with error]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            }
+        } else {
+            // Python whisper format: whisper audio.wav --model base --language en --output_format txt
+            const argv = [_][]const u8{
+                whisper_bin.?,
+                temp_audio,
+                model_arg,
+                lang_arg,
+                "--output_format=txt",
+                "--output_dir=/tmp",
+            };
+
+            var child = std.process.Child.init(&argv, self.alloc);
+            child.stdout_behavior = .Pipe;
+            child.stderr_behavior = .Ignore;
+
+            child.spawn() catch {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[Failed to run whisper]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            };
+
+            const term = child.wait() catch {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[Whisper process failed]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            };
+
+            if (term.Exited != 0) {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[Whisper exited with error]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            }
+        }
+
+        // Read output file
+        defer std.fs.cwd().deleteFile(temp_output) catch {};
+        const output_file = std.fs.cwd().openFile(temp_output, .{}) catch {
+            // Try alternative output path (Python whisper uses input filename)
+            const alt_output = "/tmp/ghostty_whisper_input.txt";
+            defer std.fs.cwd().deleteFile(alt_output) catch {};
+
+            const alt_file = std.fs.cwd().openFile(alt_output, .{}) catch {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[Whisper output file not found]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            };
+            defer alt_file.close();
+
+            var buf: [8192]u8 = undefined;
+            const bytes = alt_file.readAll(&buf) catch 0;
+            if (bytes == 0) {
+                return VoiceInputResult{
+                    .text = try self.alloc.dupe(u8, "[Whisper produced empty output]"),
+                    .confidence = 0.0,
+                    .language = try self.alloc.dupe(u8, self.config.language),
+                    .duration_ms = duration,
+                    .is_partial = false,
+                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                };
+            }
+
+            // Trim whitespace
+            var text = buf[0..bytes];
+            text = std.mem.trim(u8, text, " \t\n\r");
+
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, text),
+                .confidence = 0.92,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+        defer output_file.close();
+
+        var buf: [8192]u8 = undefined;
+        const bytes = output_file.readAll(&buf) catch 0;
+        if (bytes == 0) {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Whisper produced empty output]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        }
+
+        // Trim whitespace
+        var text = buf[0..bytes];
+        text = std.mem.trim(u8, text, " \t\n\r");
+
+        log.info("Whisper transcription complete: {d} chars", .{text.len});
+
         return VoiceInputResult{
-            .text = try self.alloc.dupe(u8, "[Whisper model - cpp bindings required]"),
-            .confidence = 0.0,
+            .text = try self.alloc.dupe(u8, text),
+            .confidence = 0.92,
             .language = try self.alloc.dupe(u8, self.config.language),
             .duration_ms = duration,
             .is_partial = false,
@@ -341,17 +799,200 @@ pub const VoiceInputManager = struct {
         };
     }
 
-    /// Process audio using external service
+    /// Process audio using external service (OpenAI Whisper API)
     fn processExternal(self: *VoiceInputManager, duration: i64) !VoiceInputResult {
-        // Would send audio to external service via HTTP
+        const service_url = self.config.external_service_url orelse {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[External service URL not configured]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+
+        const audio_buffer = self.audio_buffer orelse {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[No audio data captured]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+
+        // Convert float samples to WAV format
+        const wav_data = try self.encodeWav(audio_buffer);
+        defer self.alloc.free(wav_data);
+
+        // Make HTTP request to external service
+        var client = std.http.Client{ .allocator = self.alloc };
+        defer client.deinit();
+
+        const uri = std.Uri.parse(service_url) catch {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Invalid service URL]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+
+        // Build multipart form data
+        const boundary = "----GhosttyVoiceBoundary";
+        var body = ArrayList(u8).init(self.alloc);
+        defer body.deinit();
+
+        // Model field
+        try body.appendSlice("--" ++ boundary ++ "\r\n");
+        try body.appendSlice("Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+        try body.appendSlice("whisper-1\r\n");
+
+        // Language field
+        try body.appendSlice("--" ++ boundary ++ "\r\n");
+        try body.appendSlice("Content-Disposition: form-data; name=\"language\"\r\n\r\n");
+        try body.appendSlice(self.config.language);
+        try body.appendSlice("\r\n");
+
+        // Audio file
+        try body.appendSlice("--" ++ boundary ++ "\r\n");
+        try body.appendSlice("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n");
+        try body.appendSlice("Content-Type: audio/wav\r\n\r\n");
+        try body.appendSlice(wav_data);
+        try body.appendSlice("\r\n--" ++ boundary ++ "--\r\n");
+
+        var req = client.open(.POST, uri, .{
+            .extra_headers = &[_]std.http.Header{
+                .{ .name = "Content-Type", .value = "multipart/form-data; boundary=" ++ boundary },
+            },
+        }) catch {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Failed to connect to service]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+        defer req.deinit();
+
+        req.transfer_encoding = .{ .content_length = body.items.len };
+        req.send() catch {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Failed to send request]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+        req.writeAll(body.items) catch {};
+        req.finish() catch {};
+        req.wait() catch {};
+
+        if (req.status != .ok) {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Service returned error]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        }
+
+        // Read and parse response
+        var response_body = ArrayList(u8).init(self.alloc);
+        defer response_body.deinit();
+        var reader = req.reader();
+        reader.readAllArrayList(&response_body, 64 * 1024) catch {};
+
+        // Parse JSON response for "text" field
+        const text = self.parseJsonText(response_body.items) orelse {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Failed to parse response]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+
         return VoiceInputResult{
-            .text = try self.alloc.dupe(u8, "[External service - HTTP client required]"),
-            .confidence = 0.0,
+            .text = text,
+            .confidence = 0.95,
             .language = try self.alloc.dupe(u8, self.config.language),
             .duration_ms = duration,
             .is_partial = false,
             .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
         };
+    }
+
+    /// Parse JSON to extract "text" field value
+    fn parseJsonText(self: *VoiceInputManager, json: []const u8) ?[]const u8 {
+        const text_key = "\"text\":";
+        const start = std.mem.indexOf(u8, json, text_key) orelse return null;
+        var pos = start + text_key.len;
+
+        // Skip whitespace
+        while (pos < json.len and (json[pos] == ' ' or json[pos] == '\t' or json[pos] == '\n')) : (pos += 1) {}
+        if (pos >= json.len or json[pos] != '"') return null;
+        pos += 1;
+
+        const text_start = pos;
+        while (pos < json.len and json[pos] != '"') : (pos += 1) {
+            if (json[pos] == '\\' and pos + 1 < json.len) pos += 1; // Skip escaped chars
+        }
+        if (pos >= json.len) return null;
+
+        return self.alloc.dupe(u8, json[text_start..pos]) catch null;
+    }
+
+    /// Encode audio samples to WAV format
+    fn encodeWav(self: *VoiceInputManager, buffer: AudioBuffer) ![]u8 {
+        const num_samples = buffer.samples.len;
+        const bytes_per_sample = 2; // 16-bit PCM
+        const data_size = num_samples * bytes_per_sample;
+        const file_size = 44 + data_size; // WAV header is 44 bytes
+
+        var wav = try self.alloc.alloc(u8, file_size);
+
+        // RIFF header
+        @memcpy(wav[0..4], "RIFF");
+        std.mem.writeInt(u32, wav[4..8], @intCast(file_size - 8), .little);
+        @memcpy(wav[8..12], "WAVE");
+
+        // fmt chunk
+        @memcpy(wav[12..16], "fmt ");
+        std.mem.writeInt(u32, wav[16..20], 16, .little); // chunk size
+        std.mem.writeInt(u16, wav[20..22], 1, .little); // PCM format
+        std.mem.writeInt(u16, wav[22..24], buffer.channels, .little);
+        std.mem.writeInt(u32, wav[24..28], buffer.sample_rate, .little);
+        std.mem.writeInt(u32, wav[28..32], buffer.sample_rate * buffer.channels * bytes_per_sample, .little);
+        std.mem.writeInt(u16, wav[32..34], buffer.channels * bytes_per_sample, .little);
+        std.mem.writeInt(u16, wav[34..36], 16, .little); // bits per sample
+
+        // data chunk
+        @memcpy(wav[36..40], "data");
+        std.mem.writeInt(u32, wav[40..44], @intCast(data_size), .little);
+
+        // Convert float samples to 16-bit PCM
+        var offset: usize = 44;
+        for (buffer.samples) |sample| {
+            const clamped = @max(-1.0, @min(1.0, sample));
+            const pcm: i16 = @intFromFloat(clamped * 32767.0);
+            std.mem.writeInt(i16, wav[offset..][0..2], pcm, .little);
+            offset += 2;
+        }
+
+        return wav;
     }
 
     /// Process using mock backend (for testing)

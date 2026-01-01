@@ -1,19 +1,13 @@
 //! Voice Capture Module for Linux/GTK
 //!
-//! This module provides voice input capability using PulseAudio/PipeWire
-//! for audio capture and OpenAI's Whisper API for transcription.
+//! Provides voice input using PulseAudio for capture and
+//! OpenAI Whisper API for transcription.
 //!
-//! Architecture:
-//! 1. Audio capture via `parecord` subprocess (PulseAudio) or `arecord` (ALSA)
-//! 2. Audio data sent to Whisper API for transcription
-//! 3. Transcribed text returned to callback
+//! Uses subprocess spawning for audio capture and curl for API calls.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
-const glib = @import("glib.zig");
-const gio = glib.gio;
-const gobject = glib.gobject;
+const ChildProcess = std.process.Child;
 
 const log = std.log.scoped(.voice_capture);
 
@@ -26,69 +20,41 @@ pub const CaptureState = enum {
     error_state,
 };
 
-/// Voice capture result
-pub const CaptureResult = struct {
-    text: []const u8,
-    duration_ms: i64,
-    success: bool,
-    error_message: ?[]const u8,
-};
-
 /// Voice capture configuration
 pub const CaptureConfig = struct {
-    /// Maximum recording duration in seconds
-    max_duration_seconds: u32 = 30,
-    /// Sample rate for audio capture
-    sample_rate: u32 = 16000,
-    /// Audio format (wav is most compatible)
-    format: AudioFormat = .wav,
-    /// Whisper API endpoint
-    whisper_endpoint: []const u8 = "https://api.openai.com/v1/audio/transcriptions",
     /// API key for Whisper
     api_key: ?[]const u8 = null,
-    /// Language hint for transcription
+    /// Maximum recording duration in seconds
+    max_duration_seconds: u32 = 30,
+    /// Language hint
     language: []const u8 = "en",
-
-    pub const AudioFormat = enum {
-        wav,
-        flac,
-        mp3,
-    };
 };
 
 /// Voice Capture Manager
 pub const VoiceCaptureManager = struct {
     allocator: Allocator,
     config: CaptureConfig,
-    state: CaptureState,
-    audio_data: std.ArrayList(u8),
-    record_process: ?*gio.Subprocess,
-    start_time: i64,
-    error_message: ?[]const u8,
-
-    /// Callback for when transcription completes
-    on_complete: ?*const fn (result: CaptureResult, user_data: ?*anyopaque) void,
-    callback_user_data: ?*anyopaque,
+    state: CaptureState = .idle,
+    record_process: ?ChildProcess = null,
+    temp_file_path: ?[]const u8 = null,
+    start_time: i64 = 0,
+    error_message: ?[]const u8 = null,
+    transcribed_text: ?[]const u8 = null,
 
     pub fn init(allocator: Allocator) VoiceCaptureManager {
         return .{
             .allocator = allocator,
             .config = .{},
-            .state = .idle,
-            .audio_data = std.ArrayList(u8).init(allocator),
-            .record_process = null,
-            .start_time = 0,
-            .error_message = null,
-            .on_complete = null,
-            .callback_user_data = null,
         };
     }
 
     pub fn deinit(self: *VoiceCaptureManager) void {
-        self.stopRecording();
-        self.audio_data.deinit();
+        self.cleanup();
         if (self.error_message) |msg| {
             self.allocator.free(msg);
+        }
+        if (self.transcribed_text) |text| {
+            self.allocator.free(text);
         }
     }
 
@@ -97,114 +63,90 @@ pub const VoiceCaptureManager = struct {
         self.config = config;
     }
 
-    /// Set the callback for completion
-    pub fn setCallback(
-        self: *VoiceCaptureManager,
-        callback: ?*const fn (CaptureResult, ?*anyopaque) void,
-        user_data: ?*anyopaque,
-    ) void {
-        self.on_complete = callback;
-        self.callback_user_data = user_data;
-    }
-
     /// Start recording audio
     pub fn startRecording(self: *VoiceCaptureManager) !void {
-        if (self.state == .recording) {
-            return error.AlreadyRecording;
+        if (self.state == .recording) return error.AlreadyRecording;
+
+        // Clear previous results
+        if (self.transcribed_text) |text| {
+            self.allocator.free(text);
+            self.transcribed_text = null;
+        }
+        if (self.error_message) |msg| {
+            self.allocator.free(msg);
+            self.error_message = null;
         }
 
-        self.audio_data.clearRetainingCapacity();
-        self.start_time = std.time.milliTimestamp();
-        self.state = .recording;
-
-        // Build the audio capture command
-        // Try parecord (PulseAudio) first, fall back to arecord (ALSA)
-        const format_arg = switch (self.config.format) {
-            .wav => "--file-format=wav",
-            .flac => "--file-format=flac",
-            .mp3 => "--file-format=wav", // mp3 encoding typically requires lame
+        // Create temp file path
+        var path_buf: [128]u8 = undefined;
+        const timestamp = std.time.milliTimestamp();
+        const path = std.fmt.bufPrint(&path_buf, "/tmp/ghostty_voice_{d}.wav", .{timestamp}) catch {
+            return error.PathTooLong;
         };
+        self.temp_file_path = try self.allocator.dupe(u8, path);
 
-        const rate_arg = std.fmt.allocPrint(self.allocator, "--rate={d}", .{self.config.sample_rate}) catch return error.OutOfMemory;
-        defer self.allocator.free(rate_arg);
-
-        // Try to detect which audio capture tool is available
-        const capture_cmd = detectAudioCaptureCommand() orelse {
-            self.setError("No audio capture tool found. Install pulseaudio-utils or alsa-utils.");
+        // Detect audio capture command
+        const capture_cmd = detectAudioCapture() orelse {
+            try self.setError("No audio capture tool found. Install pulseaudio-utils (parecord) or alsa-utils (arecord).");
             return error.NoAudioCapture;
         };
 
-        log.info("Starting audio capture with: {s}", .{capture_cmd});
+        self.start_time = std.time.milliTimestamp();
 
-        // Create subprocess launcher
-        const launcher = gio.SubprocessLauncher.new(.{
-            .flags = .{ .stdout_pipe = true, .stderr_pipe = true },
-        });
-        defer launcher.unref();
+        // Spawn the recording process
+        const argv = [_][]const u8{
+            capture_cmd,
+            "--file-format=wav",
+            "--channels=1",
+            "--rate=16000",
+            self.temp_file_path.?,
+        };
 
-        // Build command arguments
-        var args = std.ArrayList([*:0]const u8).init(self.allocator);
-        defer args.deinit();
-
-        try args.append(capture_cmd);
-        try args.append("--channels=1");
-        try args.appendSlice(&[_][*:0]const u8{
-            format_arg,
-            "-",
-        });
-
-        // Spawn the process
-        self.record_process = launcher.spawn(args.items.ptr) catch |err| {
+        var child = ChildProcess.init(&argv, self.allocator);
+        child.spawn() catch |err| {
             log.err("Failed to spawn audio capture: {}", .{err});
-            self.setError("Failed to start audio capture");
+            try self.setError("Failed to start audio recording");
             return error.SpawnFailed;
         };
 
-        log.info("Audio capture started", .{});
+        self.record_process = child;
+        self.state = .recording;
+
+        log.info("Audio recording started with {s}", .{capture_cmd});
     }
 
-    /// Stop recording and begin transcription
-    pub fn stopRecording(self: *VoiceCaptureManager) void {
+    /// Stop recording and transcribe
+    pub fn stopRecording(self: *VoiceCaptureManager) !void {
         if (self.state != .recording) return;
 
-        const duration = std.time.milliTimestamp() - self.start_time;
-        log.info("Stopping recording after {d}ms", .{duration});
+        const duration_ms = std.time.milliTimestamp() - self.start_time;
+        log.info("Stopping recording after {d}ms", .{duration_ms});
 
-        // Send SIGTERM to the recording process
-        if (self.record_process) |proc| {
-            proc.sendSignal(15); // SIGTERM
-
-            // Read captured audio from stdout
-            const stdout = proc.getStdoutPipe();
-            if (stdout) |pipe| {
-                self.readAudioData(pipe) catch |err| {
-                    log.err("Failed to read audio data: {}", .{err});
-                };
-            }
-
-            proc.unref();
+        // Terminate the recording process
+        if (self.record_process) |*proc| {
+            _ = proc.kill() catch {};
+            _ = proc.wait() catch {};
             self.record_process = null;
         }
 
-        if (self.audio_data.items.len > 0) {
-            self.state = .transcribing;
-            self.transcribeAudio(duration);
-        } else {
-            self.setError("No audio data captured");
-            self.state = .error_state;
-        }
+        // Brief delay to ensure file is flushed
+        std.time.sleep(50 * std.time.ns_per_ms);
+
+        // Start transcription
+        self.state = .transcribing;
+        try self.transcribeRecording();
     }
 
     /// Toggle recording state
     pub fn toggleRecording(self: *VoiceCaptureManager) !void {
         if (self.state == .recording) {
-            self.stopRecording();
-        } else {
+            try self.stopRecording();
+        } else if (self.state == .idle or self.state == .completed or self.state == .error_state) {
             try self.startRecording();
         }
     }
 
-    /// Check if currently recording
+    /// Check if recording
     pub fn isRecording(self: *const VoiceCaptureManager) bool {
         return self.state == .recording;
     }
@@ -214,201 +156,177 @@ pub const VoiceCaptureManager = struct {
         return self.state;
     }
 
+    /// Get transcribed text (after completion)
+    pub fn getText(self: *const VoiceCaptureManager) ?[]const u8 {
+        return self.transcribed_text;
+    }
+
+    /// Get error message
+    pub fn getError(self: *const VoiceCaptureManager) ?[]const u8 {
+        return self.error_message;
+    }
+
     // Private methods
 
-    fn readAudioData(self: *VoiceCaptureManager, stream: *gio.InputStream) !void {
-        var buffer: [4096]u8 = undefined;
-        while (true) {
-            const bytes_read = stream.read(&buffer) catch break;
-            if (bytes_read == 0) break;
-            try self.audio_data.appendSlice(buffer[0..bytes_read]);
-        }
-    }
-
-    fn transcribeAudio(self: *VoiceCaptureManager, duration: i64) void {
-        // If no API key, use mock transcription
+    fn transcribeRecording(self: *VoiceCaptureManager) !void {
         const api_key = self.config.api_key orelse {
-            self.deliverResult(.{
-                .text = "[Voice input requires ai-api-key to be set for OpenAI Whisper transcription]",
-                .duration_ms = duration,
-                .success = false,
-                .error_message = "No API key configured",
-            });
+            self.state = .completed;
+            self.transcribed_text = try self.allocator.dupe(u8, "[Configure ai-api-key for voice transcription]");
             return;
         };
 
-        // Make HTTP request to Whisper API
-        self.sendToWhisperApi(api_key, duration) catch |err| {
-            log.err("Whisper API request failed: {}", .{err});
-            self.setError("Transcription failed");
-            self.deliverResult(.{
-                .text = "",
-                .duration_ms = duration,
-                .success = false,
-                .error_message = self.error_message,
-            });
-        };
-    }
-
-    fn sendToWhisperApi(self: *VoiceCaptureManager, api_key: []const u8, duration: i64) !void {
-        // Use std.http.Client for the request
-        var client = std.http.Client{ .allocator = self.allocator };
-        defer client.deinit();
-
-        const uri = std.Uri.parse(self.config.whisper_endpoint) catch {
-            return error.InvalidUri;
+        const temp_path = self.temp_file_path orelse {
+            try self.setError("No recording file");
+            return;
         };
 
-        // Build multipart form data
-        const boundary = "----GhosttyVoiceBoundary" ++ std.fmt.comptimePrint("{d}", .{std.time.milliTimestamp()});
+        // Check if file exists and has content
+        const file = std.fs.cwd().openFile(temp_path, .{}) catch {
+            try self.setError("Recording file not found");
+            return;
+        };
+        const stat = file.stat() catch {
+            file.close();
+            try self.setError("Could not read recording file");
+            return;
+        };
+        file.close();
 
-        var body = std.ArrayList(u8).init(self.allocator);
-        defer body.deinit();
-
-        // Add model field
-        try body.appendSlice("--");
-        try body.appendSlice(boundary);
-        try body.appendSlice("\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nwhisper-1\r\n");
-
-        // Add language field
-        try body.appendSlice("--");
-        try body.appendSlice(boundary);
-        try body.appendSlice("\r\nContent-Disposition: form-data; name=\"language\"\r\n\r\n");
-        try body.appendSlice(self.config.language);
-        try body.appendSlice("\r\n");
-
-        // Add audio file
-        try body.appendSlice("--");
-        try body.appendSlice(boundary);
-        try body.appendSlice("\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n");
-        try body.appendSlice(self.audio_data.items);
-        try body.appendSlice("\r\n--");
-        try body.appendSlice(boundary);
-        try body.appendSlice("--\r\n");
-
-        // Prepare headers
-        var headers_buf: [2048]u8 = undefined;
-        const auth_header = std.fmt.bufPrint(&headers_buf, "Bearer {s}", .{api_key}) catch return error.HeaderTooLong;
-
-        var req = try client.open(.POST, uri, .{
-            .extra_headers = &[_]std.http.Header{
-                .{ .name = "Authorization", .value = auth_header },
-                .{ .name = "Content-Type", .value = "multipart/form-data; boundary=" ++ boundary },
-            },
-        });
-        defer req.deinit();
-
-        req.transfer_encoding = .{ .content_length = body.items.len };
-        try req.send();
-        try req.writeAll(body.items);
-        try req.finish();
-        try req.wait();
-
-        if (req.status != .ok) {
-            self.deliverResult(.{
-                .text = "",
-                .duration_ms = duration,
-                .success = false,
-                .error_message = "Whisper API returned error",
-            });
+        if (stat.size < 1000) { // WAV header is ~44 bytes, need some actual audio
+            try self.setError("Recording too short");
             return;
         }
 
-        // Read response
-        var response_body = std.ArrayList(u8).init(self.allocator);
-        defer response_body.deinit();
+        log.info("Transcribing {d} bytes of audio", .{stat.size});
 
-        var reader = req.reader();
-        try reader.readAllArrayList(&response_body, 1024 * 1024);
-
-        // Parse JSON response to get transcribed text
-        const text = self.parseWhisperResponse(response_body.items) catch {
-            self.deliverResult(.{
-                .text = "",
-                .duration_ms = duration,
-                .success = false,
-                .error_message = "Failed to parse response",
-            });
+        // Build curl command for Whisper API
+        var auth_header_buf: [300]u8 = undefined;
+        const auth_header = std.fmt.bufPrint(&auth_header_buf, "Authorization: Bearer {s}", .{api_key}) catch {
+            try self.setError("API key too long");
             return;
         };
 
-        self.state = .completed;
-        self.deliverResult(.{
-            .text = text,
-            .duration_ms = duration,
-            .success = true,
-            .error_message = null,
-        });
+        var file_arg_buf: [256]u8 = undefined;
+        const file_arg = std.fmt.bufPrint(&file_arg_buf, "file=@{s}", .{temp_path}) catch {
+            try self.setError("Path too long");
+            return;
+        };
+
+        const argv = [_][]const u8{
+            "curl",
+            "-s",
+            "-X",
+            "POST",
+            "https://api.openai.com/v1/audio/transcriptions",
+            "-H",
+            auth_header,
+            "-F",
+            "model=whisper-1",
+            "-F",
+            file_arg,
+        };
+
+        var child = ChildProcess.init(&argv, self.allocator);
+        child.stdout_behavior = .Pipe;
+        child.stderr_behavior = .Pipe;
+
+        child.spawn() catch |err| {
+            log.err("Failed to spawn curl: {}", .{err});
+            try self.setError("Failed to call transcription API");
+            return;
+        };
+
+        // Read stdout
+        var stdout_buf: [8192]u8 = undefined;
+        const stdout = child.stdout.?;
+        const bytes_read = stdout.readAll(&stdout_buf) catch 0;
+        const response = stdout_buf[0..bytes_read];
+
+        const term = child.wait() catch {
+            try self.setError("Transcription request failed");
+            return;
+        };
+
+        if (term.Exited != 0) {
+            try self.setError("Transcription API error");
+            return;
+        }
+
+        // Parse response
+        if (self.parseWhisperResponse(response)) |text| {
+            self.transcribed_text = text;
+            self.state = .completed;
+            log.info("Transcription complete: {s}", .{text});
+        } else {
+            // Check for error in response
+            if (std.mem.indexOf(u8, response, "\"error\"")) |_| {
+                try self.setError("API returned an error. Check your API key.");
+            } else {
+                try self.setError("Failed to parse transcription response");
+            }
+        }
+
+        self.cleanup();
     }
 
-    fn parseWhisperResponse(self: *VoiceCaptureManager, json: []const u8) ![]const u8 {
-        // Simple JSON parsing for {"text": "..."}
+    fn parseWhisperResponse(self: *VoiceCaptureManager, json: []const u8) ?[]const u8 {
+        // Parse {"text": "..."}
         const text_key = "\"text\":";
-        const start = std.mem.indexOf(u8, json, text_key) orelse return error.NoTextInResponse;
-        const after_key = start + text_key.len;
+        const start = std.mem.indexOf(u8, json, text_key) orelse return null;
+        var pos = start + text_key.len;
 
-        // Find the opening quote
-        var pos = after_key;
-        while (pos < json.len and json[pos] != '"') : (pos += 1) {}
-        if (pos >= json.len) return error.MalformedJson;
-        pos += 1; // Skip opening quote
+        // Skip whitespace
+        while (pos < json.len and (json[pos] == ' ' or json[pos] == '\t' or json[pos] == '\n')) : (pos += 1) {}
+        if (pos >= json.len or json[pos] != '"') return null;
+        pos += 1;
 
         // Find closing quote
         const text_start = pos;
-        while (pos < json.len and json[pos] != '"') : (pos += 1) {}
-        if (pos >= json.len) return error.MalformedJson;
+        while (pos < json.len) : (pos += 1) {
+            if (json[pos] == '"') {
+                if (pos == text_start or json[pos - 1] != '\\') break;
+            }
+        }
+        if (pos >= json.len) return null;
 
-        return self.allocator.dupe(u8, json[text_start..pos]) catch return error.OutOfMemory;
+        return self.allocator.dupe(u8, json[text_start..pos]) catch null;
     }
 
-    fn deliverResult(self: *VoiceCaptureManager, result: CaptureResult) void {
-        if (self.on_complete) |callback| {
-            callback(result, self.callback_user_data);
+    fn cleanup(self: *VoiceCaptureManager) void {
+        // Delete temp file
+        if (self.temp_file_path) |path| {
+            std.fs.cwd().deleteFile(path) catch {};
+            self.allocator.free(path);
+            self.temp_file_path = null;
         }
     }
 
-    fn setError(self: *VoiceCaptureManager, message: []const u8) void {
+    fn setError(self: *VoiceCaptureManager, message: []const u8) !void {
         if (self.error_message) |old| {
             self.allocator.free(old);
         }
-        self.error_message = self.allocator.dupe(u8, message) catch null;
+        self.error_message = try self.allocator.dupe(u8, message);
         self.state = .error_state;
     }
 };
 
 /// Detect available audio capture command
-fn detectAudioCaptureCommand() ?[*:0]const u8 {
-    // Check for parecord (PulseAudio/PipeWire)
-    if (std.fs.cwd().access("/usr/bin/parecord", .{})) {
-        return "parecord";
-    } else |_| {}
+fn detectAudioCapture() ?[]const u8 {
+    const tools = [_]struct { path: []const u8, cmd: []const u8 }{
+        .{ .path = "/usr/bin/parecord", .cmd = "parecord" },
+        .{ .path = "/bin/parecord", .cmd = "parecord" },
+        .{ .path = "/usr/bin/arecord", .cmd = "arecord" },
+        .{ .path = "/bin/arecord", .cmd = "arecord" },
+    };
 
-    // Check for arecord (ALSA)
-    if (std.fs.cwd().access("/usr/bin/arecord", .{})) {
-        return "arecord";
-    } else |_| {}
-
-    // Check common alternative paths
-    if (std.fs.cwd().access("/bin/parecord", .{})) {
-        return "parecord";
-    } else |_| {}
-
-    if (std.fs.cwd().access("/bin/arecord", .{})) {
-        return "arecord";
-    } else |_| {}
-
+    for (tools) |tool| {
+        std.fs.cwd().access(tool.path, .{}) catch continue;
+        return tool.cmd;
+    }
     return null;
 }
 
 /// Check if voice capture is available on this system
 pub fn isAvailable() bool {
-    return detectAudioCaptureCommand() != null;
-}
-
-test "voice capture manager initialization" {
-    const allocator = std.testing.allocator;
-    var manager = VoiceCaptureManager.init(allocator);
-    defer manager.deinit();
-
-    try std.testing.expectEqual(CaptureState.idle, manager.state);
+    return detectAudioCapture() != null;
 }

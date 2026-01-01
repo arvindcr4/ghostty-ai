@@ -34,24 +34,47 @@ class VoiceInputManager: ObservableObject {
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: locale))
 
         if speechRecognizer == nil {
-            // Log error and provide clear message
+            // System locale not supported, try en-US fallback
             print("VoiceInputManager: Speech recognizer initialization failed for locale '\(locale)'. Your device may not support speech recognition for this locale.")
-            errorMessage = "Speech recognition is not available for your locale. Using English (US) as fallback."
+
             // Try fallback to en-US
             speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+
+            // Check if fallback also failed
+            if speechRecognizer == nil {
+                // Neither system locale nor en-US works - speech recognition is unavailable
+                print("VoiceInputManager: Fallback to en-US also failed. Speech recognition is not available on this device.")
+                errorMessage = "Speech recognition is not available on this device. Please ensure your Mac supports speech recognition and try again."
+            } else {
+                // Fallback succeeded
+                errorMessage = "Speech recognition is not available for your locale. Using English (US) as fallback."
+            }
         }
         checkAuthorizationStatus()
     }
 
     /// Clean up resources when deallocated
     /// Critical for preventing resource leaks with AVAudioEngine
-    /// Note: We don't call stopListening() here because deinit is not actor-isolated
-    /// and stopListening() is @MainActor isolated. The audio engine will be stopped
-    /// automatically when it's deallocated.
+    /// Note: This runs on the deallocation thread, not @MainActor, so we do
+    /// synchronous cleanup of AVAudioEngine resources (which is thread-safe).
     deinit {
         // Cancel any pending tasks
         debounceTask?.cancel()
-        // AVAudioEngine cleanup happens automatically when deallocated
+        silenceTimer?.invalidate()
+
+        // Stop audio engine and clean up resources (thread-safe in AVFoundation)
+        // This prevents the microphone from staying active after deallocation
+        audioEngine?.stop()
+        if let engine = audioEngine {
+            let inputNode = engine.inputNode
+            inputNode.removeTap(onBus: 0)
+        }
+        audioEngine = nil
+
+        // Cancel recognition task
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        recognitionRequest = nil
     }
 
     /// Check current authorization status
@@ -164,8 +187,13 @@ class VoiceInputManager: ObservableObject {
 
         // Buffer size: 1024 samples (~21ms at 48kHz) balances latency vs CPU overhead
         // Apple recommends 1024-4096 for speech recognition
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            recognitionRequest.append(buffer)
+        do {
+            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+                recognitionRequest.append(buffer)
+            }
+        } catch {
+            // installTap can fail if the audio engine is in a bad state
+            throw VoiceInputError.audioEngineFailed
         }
 
         audioEngine.prepare()
@@ -176,10 +204,8 @@ class VoiceInputManager: ObservableObject {
         errorMessage = nil
 
         // Set up silence timeout - auto-stop after N seconds of no speech
-        silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceTimeoutSeconds, repeats: false) { [weak self] _ in
-            self?.stopListening()
-            self?.errorMessage = "Listening timed out due to silence. Tap mic to try again."
-        }
+        // Use @MainActor to ensure timer is created on main thread
+        scheduleSilenceTimer()
 
         // Start recognition task with debouncing for partial results
         recognitionTask = speechRecognizer?.recognitionTask(with: recognitionRequest) { [weak self] result, error in
@@ -188,11 +214,7 @@ class VoiceInputManager: ObservableObject {
 
                 if let result = result {
                     // Reset silence timer when we get speech results
-                    self.silenceTimer?.invalidate()
-                    self.silenceTimer = Timer.scheduledTimer(withTimeInterval: self.silenceTimeoutSeconds, repeats: false) { [weak self] _ in
-                        self?.stopListening()
-                        self?.errorMessage = "Listening timed out due to silence."
-                    }
+                    self.scheduleSilenceTimer()
 
                     // Debounce partial results to reduce excessive UI updates
                     self.debounceTask?.cancel()
@@ -216,6 +238,22 @@ class VoiceInputManager: ObservableObject {
                 if result?.isFinal == true {
                     self.stopListening()
                 }
+            }
+        }
+    }
+
+    /// Schedule or reschedule the silence timeout timer
+    /// This ensures the timer is created on @MainActor for thread safety
+    @MainActor
+    private func scheduleSilenceTimer() {
+        // Invalidate any existing timer first
+        silenceTimer?.invalidate()
+
+        // Create new timer with proper cleanup
+        silenceTimer = Timer.scheduledTimer(withTimeInterval: silenceTimeoutSeconds, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.stopListening()
+                self?.errorMessage = "Listening timed out due to silence. Tap mic to try again."
             }
         }
     }
