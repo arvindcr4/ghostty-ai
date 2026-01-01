@@ -134,6 +134,7 @@ pub const AiInputMode = extern struct {
         fn responseItemInit(self: *@This()) callconv(.C) void {
             const priv = gobject.ext.getPriv(self, &ResponseItemPrivate.offset);
             priv.* = .{};
+            self.content = "";
         }
 
         pub const ResponseItemClass = struct {
@@ -156,6 +157,7 @@ pub const AiInputMode = extern struct {
             const priv = gobject.ext.getPriv(self, &ResponseItemPrivate.offset);
             priv.content = content;
             priv.command = command;
+            self.content = content.ptr;
             return self;
         }
     };
@@ -243,7 +245,7 @@ pub const AiInputMode = extern struct {
         assistant: ?AiAssistant = null,
 
         /// Current streaming response (accumulated content)
-        streaming_response: ?std.ArrayList(u8) = null,
+        streaming_response: ?std.array_list.Managed(u8) = null,
 
         /// Current streaming response item (for incremental updates)
         streaming_response_item: ?*ResponseItem = null,
@@ -261,7 +263,7 @@ pub const AiInputMode = extern struct {
         suggestion_list: ?*gtk.ListBox = null,
 
         /// Current suggestions
-        current_suggestions: std.ArrayList(PromptSuggestion),
+        current_suggestions: std.array_list.Managed(PromptSuggestion),
 
         pub var offset: c_int = 0;
     };
@@ -351,7 +353,7 @@ pub const AiInputMode = extern struct {
         const priv = getPriv(self);
         const alloc = Application.default().allocator();
         priv.* = .{
-            .current_suggestions = std.ArrayList(PromptSuggestion).init(alloc),
+            .current_suggestions = std.array_list.Managed(PromptSuggestion).init(alloc),
         };
 
         // Bind the template
@@ -362,7 +364,7 @@ pub const AiInputMode = extern struct {
 
         // Populate the template dropdown
         const template_names = blk: {
-            var names = std.ArrayList([:0]const u8).init(alloc);
+            var names = std.array_list.Managed([:0]const u8).init(alloc);
             errdefer {
                 for (names.items) |n| alloc.free(n);
                 names.deinit();
@@ -395,22 +397,21 @@ pub const AiInputMode = extern struct {
         // Insert action group into widget
         self.as(gtk.Widget).insertActionGroup("ai", action_group.as(gio.ActionGroup));
 
-        // TODO: Prompt suggestions feature (incomplete)
-        // TODO: Connect to text buffer changes for prompt suggestions
-        // _ = priv.input_buffer.connectChanged(*Self, inputBufferChanged, self, .{});
-        // TODO: Create suggestion popup
-        // priv.suggestion_popup = gtk.Popover.new(priv.input_view.as(gtk.Widget));
-        // priv.suggestion_popup.?.setPosition(gtk.PositionType.top);
-        // TODO: Create suggestion list
-        // priv.suggestion_list = gtk.ListBox.new();
-        // priv.suggestion_list.?.setSelectionMode(gtk.SelectionMode.single);
-        // _ = priv.suggestion_list.?.connectRowActivated(*Self, suggestionRowActivated, self, .{});
-        // TODO: Add list to popup
-        // const scrolled = gtk.ScrolledWindow.new(null, null);
-        // scrolled.setPolicy(gtk.PolicyType.never, gtk.PolicyType.automatic);
-        // scrolled.setMaxContentHeight(200);
-        // scrolled.setChild(priv.suggestion_list.?.as(gtk.Widget));
-        // priv.suggestion_popup.?.setChild(scrolled.as(gtk.Widget));
+        // Prompt suggestions while typing
+        _ = priv.input_buffer.connectChanged(*Self, inputBufferChanged, self, .{});
+
+        priv.suggestion_popup = gtk.Popover.new(priv.input_view.as(gtk.Widget));
+        priv.suggestion_popup.?.setPosition(gtk.PositionType.top);
+
+        priv.suggestion_list = gtk.ListBox.new();
+        priv.suggestion_list.?.setSelectionMode(gtk.SelectionMode.single);
+        _ = priv.suggestion_list.?.connectRowActivated(*Self, suggestionRowActivated, self, .{});
+
+        const scrolled = gtk.ScrolledWindow.new(null, null);
+        scrolled.setPolicy(gtk.PolicyType.never, gtk.PolicyType.automatic);
+        scrolled.setMaxContentHeight(200);
+        scrolled.setChild(priv.suggestion_list.?.as(gtk.Widget));
+        priv.suggestion_popup.?.setChild(scrolled.as(gtk.Widget));
     }
 
     fn agent_toggled(button: *gtk.ToggleButton, self: *Self) callconv(.C) void {
@@ -572,7 +573,7 @@ pub const AiInputMode = extern struct {
 
     /// Strip Pango markup to get plain text
     fn stripPangoMarkup(alloc: Allocator, input: [:0]const u8) ![:0]const u8 {
-        var result = std.ArrayList(u8).init(alloc);
+        var result = std.array_list.Managed(u8).init(alloc);
         errdefer result.deinit();
 
         var i: usize = 0;
@@ -627,8 +628,8 @@ pub const AiInputMode = extern struct {
     fn extractCommandsFromMarkdown(
         alloc: Allocator,
         input: [:0]const u8,
-    ) !std.ArrayList([:0]const u8) {
-        var commands = std.ArrayList([:0]const u8).init(alloc);
+    ) !std.array_list.Managed([:0]const u8) {
+        var commands = std.array_list.Managed([:0]const u8).init(alloc);
         errdefer {
             for (commands.items) |cmd| alloc.free(cmd);
             commands.deinit();
@@ -949,11 +950,12 @@ pub const AiInputMode = extern struct {
 
         // Get the user's input from the text view
         const input_text = blk: {
-            const start: gtk.TextIter = undefined;
-            const end: gtk.TextIter = undefined;
+            var start: gtk.TextIter = undefined;
+            var end: gtk.TextIter = undefined;
             priv.input_buffer.getBounds(&start, &end);
             break :blk priv.input_buffer.getText(&start, &end, false);
         };
+        defer glib.free(@ptrCast(@constCast(input_text.ptr)));
 
         // Build the final prompt
         const selection = priv.selected_text orelse "";
@@ -1163,7 +1165,7 @@ pub const AiInputMode = extern struct {
         const priv = getPriv(self);
 
         // Initialize streaming response buffer
-        priv.streaming_response = std.ArrayList(u8).init(alloc);
+        priv.streaming_response = std.array_list.Managed(u8).init(alloc);
 
         // Create initial empty response item with empty command
         const item = ResponseItem.new("", "");
@@ -1215,6 +1217,7 @@ pub const AiInputMode = extern struct {
                 // Replace content (avoid freeing string literals)
                 if (item_priv.content.len > 0) alloc.free(item_priv.content);
                 item_priv.content = markup;
+                item.content = markup.ptr;
 
                 // Trigger UI update by notifying the store
                 priv.response_store.itemsChanged(@intCast(priv.response_store.nItems() - 1), 1, 1);
@@ -1238,6 +1241,7 @@ pub const AiInputMode = extern struct {
                     // Clear the reference but don't free the item (store owns it)
                     priv.streaming_response_item = null;
                 }
+                buffer.deinit();
                 priv.streaming_response = null;
 
                 // Re-enable send button
@@ -1416,7 +1420,7 @@ pub const AiInputMode = extern struct {
 
         // Apply redaction for sensitive data before processing
         const redacted_content = redactSensitiveData(alloc, content) catch content;
-        const free_redacted = redacted_content.ptr != content.ptr;
+        var free_redacted = redacted_content.ptr != content.ptr;
         defer if (free_redacted) alloc.free(redacted_content);
 
         // Use redacted content for further processing
@@ -1501,96 +1505,121 @@ pub const AiInputMode = extern struct {
 
     /// Convert markdown to Pango markup
     fn markdownToPango(alloc: Allocator, input: [:0]const u8) ![:0]const u8 {
-        var result = std.ArrayList(u8).init(alloc);
+        var result = std.array_list.Managed(u8).init(alloc);
         errdefer result.deinit();
 
-        var i: usize = 0;
         const input_len = input.len;
 
+        const Escape = struct {
+            fn append(out: *std.array_list.Managed(u8), text: []const u8) !void {
+                for (text) |ch| {
+                    switch (ch) {
+                        '<' => try out.appendSlice("&lt;"),
+                        '>' => try out.appendSlice("&gt;"),
+                        '&' => try out.appendSlice("&amp;"),
+                        else => try out.append(ch),
+                    }
+                }
+            }
+        };
+
+        var i: usize = 0;
         while (i < input_len) {
-            // Code blocks: ```code```
-            if (i + 6 < input_len and std.mem.eql(u8, input[i..i+3], "```")) {
-                const end_idx = std.mem.indexOfPos(u8, input, i + 3, "```") orelse input_len;
-                try result.append("<tt>");
-                try result.appendSlice(input[i + 3 .. end_idx]);
-                try result.append("</tt>\n");
-                i = end_idx + 3;
+            const at_line_start = i == 0 or input[i - 1] == '\n';
+
+            // Code blocks: ```lang\ncode\n```
+            if (i + 3 <= input_len and std.mem.eql(u8, input[i .. i + 3], "```")) {
+                const fence_end = std.mem.indexOfPos(u8, input, i + 3, "```") orelse input_len;
+
+                // Skip optional language identifier line (```bash)
+                var code_start = i + 3;
+                while (code_start < fence_end and input[code_start] != '\n') code_start += 1;
+                if (code_start < fence_end and input[code_start] == '\n') code_start += 1;
+
+                try result.appendSlice("<tt>");
+                try Escape.append(&result, input[code_start..fence_end]);
+                try result.appendSlice("</tt>");
+
+                i = if (fence_end < input_len) fence_end + 3 else input_len;
+                if (i < input_len and input[i] == '\n') {
+                    try result.append('\n');
+                    i += 1;
+                } else {
+                    try result.append('\n');
+                }
+                continue;
+            }
+
+            // Headers: # text
+            if (at_line_start and input[i] == '#') {
+                var level: usize = 0;
+                while (i + level < input_len and input[i + level] == '#') level += 1;
+                if (level <= 6 and i + level < input_len and input[i + level] == ' ') {
+                    const header_start = i + level + 1;
+                    const rel_end = std.mem.indexOfScalar(u8, input[header_start..], '\n') orelse (input_len - header_start);
+                    const sizes = [_][]const u8{ "xx-large", "x-large", "large", "medium", "small", "x-small" };
+                    const size = sizes[@min(level - 1, sizes.len - 1)];
+                    try result.print("<span size=\"{s}\"><b>", .{size});
+                    try Escape.append(&result, input[header_start .. header_start + rel_end]);
+                    try result.appendSlice("</b></span>\n");
+                    i = header_start + rel_end;
+                    if (i < input_len and input[i] == '\n') i += 1;
+                    continue;
+                }
+            }
+
+            // Simple bullet lists: "- " or "* " at line start
+            if (at_line_start and i + 2 <= input_len and (input[i] == '-' or input[i] == '*') and input[i + 1] == ' ') {
+                try result.appendSlice("• ");
+                i += 2;
                 continue;
             }
 
             // Inline code: `code`
             if (input[i] == '`') {
                 const end_idx = std.mem.indexOfPos(u8, input, i + 1, "`") orelse {
-                    try result.appendByte(input[i]);
+                    try Escape.append(&result, input[i .. i + 1]);
                     i += 1;
                     continue;
                 };
-                try result.append("<tt>");
-                try result.appendSlice(input[i + 1 .. end_idx]);
-                try result.append("</tt>");
+                try result.appendSlice("<tt>");
+                try Escape.append(&result, input[i + 1 .. end_idx]);
+                try result.appendSlice("</tt>");
                 i = end_idx + 1;
                 continue;
             }
 
             // Bold: **text** or __text__
-            if ((i + 4 < input_len and std.mem.eql(u8, input[i..i+2], "**")) or
-                (i + 4 < input_len and std.mem.eql(u8, input[i..i+2], "__"))) {
-                const marker = input[i..i+2];
+            if (i + 2 <= input_len and (std.mem.eql(u8, input[i .. @min(i + 2, input_len)], "**") or std.mem.eql(u8, input[i .. @min(i + 2, input_len)], "__"))) {
+                const marker = input[i .. i + 2];
                 const end_idx = std.mem.indexOfPos(u8, input, i + 2, marker) orelse {
-                    try result.appendByte(input[i]);
+                    try Escape.append(&result, input[i .. i + 1]);
                     i += 1;
                     continue;
                 };
-                try result.append("<b>");
-                try result.appendSlice(input[i + 2 .. end_idx]);
-                try result.append("</b>");
+                try result.appendSlice("<b>");
+                try Escape.append(&result, input[i + 2 .. end_idx]);
+                try result.appendSlice("</b>");
                 i = end_idx + 2;
                 continue;
             }
 
-            // Italic: *text* or _text_
-            if ((i + 3 < input_len and (input[i] == '*' or input[i] == '_')) and
-                (input[i+1] != '*' and input[i+1] != '_')) {
-                const marker = input[i..i+1];
+            // Italic: *text* or _text_ (avoid bold markers)
+            if (i + 1 < input_len and (input[i] == '*' or input[i] == '_') and (input[i + 1] != '*' and input[i + 1] != '_')) {
+                const marker = input[i .. i + 1];
                 const end_idx = std.mem.indexOfPos(u8, input, i + 1, marker) orelse {
-                    try result.appendByte(input[i]);
+                    try Escape.append(&result, input[i .. i + 1]);
                     i += 1;
                     continue;
                 };
-                try result.append("<i>");
-                try result.appendSlice(input[i + 1 .. end_idx]);
-                try result.append("</i>");
+                try result.appendSlice("<i>");
+                try Escape.append(&result, input[i + 1 .. end_idx]);
+                try result.appendSlice("</i>");
                 i = end_idx + 1;
                 continue;
             }
 
-            // Headers: # text
-            if (input[i] == '#' and (i == 0 or input[i-1] == '\n')) {
-                var count: usize = 0;
-                while (i + count < input_len and input[i + count] == '#') count += 1;
-                if (count <= 6 and i + count < input_len and input[i + count] == ' ') {
-                    const header_start = i + count + 1;
-                    const end_idx = std.mem.indexOfScalar(u8, input[header_start..], '\n') orelse input_len - header_start;
-                    const sizes = [_][]const u8{"xx-large", "x-large", "large", "medium", "small", "x-small"};
-                    const size = if (count - 1 < sizes.len) sizes[count - 1] else "medium";
-                    try result.print("<span size=\"{s}\"><b>", .{size});
-                    try result.appendSlice(input[header_start .. header_start + end_idx]);
-                    try result.append("</b></span>\n");
-                    i = header_start + end_idx + 1;
-                    continue;
-                }
-            }
-
-            // Escape special characters for Pango
-            if (input[i] == '<') {
-                try result.append("&lt;");
-            } else if (input[i] == '>') {
-                try result.append("&gt;");
-            } else if (input[i] == '&') {
-                try result.append("&amp;");
-            } else {
-                try result.appendByte(input[i]);
-            }
+            try Escape.append(&result, input[i .. i + 1]);
             i += 1;
         }
 
@@ -1604,10 +1633,11 @@ pub const AiInputMode = extern struct {
         const alloc = Application.default().allocator();
 
         // Get current text
-        const start: gtk.TextIter = undefined;
-        const end: gtk.TextIter = undefined;
+        var start: gtk.TextIter = undefined;
+        var end: gtk.TextIter = undefined;
         priv.input_buffer.getBounds(&start, &end);
         const text = priv.input_buffer.getText(&start, &end, false);
+        defer glib.free(@ptrCast(@constCast(text.ptr)));
 
         // Check if we should show suggestions
         if (priv.prompt_suggestion_service) |*service| {
@@ -1641,6 +1671,9 @@ pub const AiInputMode = extern struct {
         const alloc = Application.default().allocator();
 
         // Clear current suggestions
+        for (priv.current_suggestions.items) |*suggestion| {
+            suggestion.deinit(alloc);
+        }
         priv.current_suggestions.clearRetainingCapacity();
         for (suggestions) |suggestion| {
             // Copy suggestion to storage
