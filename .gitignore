@@ -24,3 +24,7 @@ glad.zip
 /ghostty.qcow2
 
 vgcore.*
+macos/macos/GhosttyKit.xcframework/
+*.o
+*.a
+zig_*_test
