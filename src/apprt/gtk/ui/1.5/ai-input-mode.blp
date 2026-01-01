@@ -1,0 +1,273 @@
+using Gtk 4.0;
+using Gio 2.0;
+using Adw 1;
+
+Adw.Dialog dialog {
+  content-width: 800;
+  height: 500;
+  closed => $closed();
+
+  Adw.ToolbarView {
+    top-bar-style: raised;
+
+    [top]
+    Adw.HeaderBar {
+      title-widget: Adw.WindowTitle {
+        title: _("AI Assistant");
+      };
+
+      [end]
+      Gtk.Box button_box {
+        orientation: horizontal;
+        spacing: 6;
+
+        Gtk.ToggleButton agent_toggle {
+          icon-name: "bolt-symbolic";
+          tooltip-text: _("Agent mode: auto-run commands from AI responses");
+          toggled => $agent_toggled();
+          styles ["flat"]
+        }
+
+        Gtk.Button regenerate_btn {
+          icon-name: "view-refresh-symbolic";
+          tooltip-text: _("Regenerate response");
+          visible: true;
+          sensitive: bind regenerate_sensitive;
+          clicked => $regenerate_clicked();
+          styles ["flat"]
+        }
+
+        Gtk.Button stop_btn {
+          icon-name: "process-stop-symbolic";
+          tooltip-text: _("Stop generation");
+          visible: true;
+          sensitive: bind stop_sensitive;
+          clicked => $stop_clicked();
+          styles ["destructive-action"]
+        }
+
+        Gtk.Button send_btn {
+          icon-name: "send-to-symbolic";
+          tooltip-text: _("Send to AI");
+          sensitive: bind send_sensitive;
+          clicked => $send_clicked();
+          styles ["suggested-action"]
+        }
+      }
+    }
+
+    Gtk.Box {
+      orientation: vertical;
+      spacing: 12;
+
+      Gtk.Box template_box {
+        orientation: horizontal;
+        spacing: 6;
+        margin-start: 12;
+        margin-end: 12;
+        margin-top: 12;
+
+        Gtk.Label {
+          label: _("Template:");
+          halign: start;
+          styles ["dim-label"]
+        }
+
+        Gtk.DropDown template_dropdown {
+          hexpand: true;
+          notify::selected => $template_changed();
+        }
+      }
+
+      Gtk.Box input_box {
+        orientation: vertical;
+        spacing: 6;
+        margin-start: 12;
+        margin-end: 12;
+        vexpand: true;
+
+        // Context chips - visual indicators showing what context is available
+        Gtk.FlowBox context_chips {
+          selection-mode: none;
+          row-spacing: 4;
+          column-spacing: 4;
+          homogeneous: false;
+          visible: false;
+          max-children-per-line: 10;
+          halign: start;
+
+          Gtk.FlowBoxChild {
+            Gtk.Box selection_chip {
+              orientation: horizontal;
+              spacing: 4;
+              visible: false;
+
+              Gtk.Image {
+                icon-name: "selection-mode-symbolic";
+              }
+
+              Gtk.Label {
+                label: _("Selection");
+              }
+
+              styles ["context-chip", "selection-chip"]
+            }
+          }
+
+          Gtk.FlowBoxChild {
+            Gtk.Box history_chip {
+              orientation: horizontal;
+              spacing: 4;
+              visible: false;
+
+              Gtk.Image {
+                icon-name: "document-open-recent-symbolic";
+              }
+
+              Gtk.Label {
+                label: _("History");
+              }
+
+              styles ["context-chip", "history-chip"]
+            }
+          }
+
+          Gtk.FlowBoxChild {
+            Gtk.Box directory_chip {
+              orientation: horizontal;
+              spacing: 4;
+
+              Gtk.Image {
+                icon-name: "folder-symbolic";
+              }
+
+              Gtk.Label directory_label {
+                label: _("~/");
+                ellipsize: start;
+                max-width-chars: 20;
+              }
+
+              styles ["context-chip", "directory-chip"]
+            }
+          }
+
+          Gtk.FlowBoxChild {
+            Gtk.Box git_chip {
+              orientation: horizontal;
+              spacing: 4;
+              visible: false;
+
+              Gtk.Image {
+                icon-name: "git-symbolic";
+              }
+
+              Gtk.Label git_label {
+                label: _("main");
+                max-width-chars: 15;
+              }
+
+              styles ["context-chip", "git-chip"]
+            }
+          }
+
+          styles ["context-chips-box"]
+        }
+
+        Gtk.Label context_label {
+          label: _("AI will use selected text as context");
+          halign: start;
+          visible: false;
+          styles ["dim-label"]
+        }
+
+        Gtk.TextView input_view {
+          vexpand: true;
+          wrap-mode: word;
+          accepts-tab: false;
+          left-margin: 12;
+          right-margin: 12;
+          top-margin: 12;
+          bottom-margin: 12;
+
+          styles ["ai-input-view", "card"]
+        }
+
+        Gtk.ScrolledWindow scrolled {
+          min-content-height: 150;
+          vexpand: true;
+
+          Gtk.ListView response_view {
+            single-click-activate: false;
+            visible: false;
+            model: Gtk.SingleSelection response_model {
+              model: Gio.ListStore response_store {
+                item-type: typeof<$AiResponseItem>;
+              };
+            };
+
+            factory: Gtk.BuilderListItemFactory {
+              template Gtk.ListItem {
+                child: Gtk.Box {
+                  orientation: vertical;
+                  spacing: 6;
+                  margin-start: 12;
+                  margin-end: 12;
+                  margin-top: 6;
+                  margin-bottom: 6;
+
+                  Gtk.Box {
+                    orientation: horizontal;
+                    spacing: 6;
+
+                    Gtk.Label {
+                      halign: start;
+                      hexpand: true;
+                      wrap: true;
+                      xalign: 0;
+                      label: bind template.item as <$AiResponseItem>.content;
+                      selectable: true;
+                      use-markup: true;
+
+                      styles ["ai-response-label"]
+                    }
+
+                    Gtk.Box {
+                      orientation: vertical;
+                      valign: start;
+                      spacing: 4;
+
+                      Gtk.Button {
+                        icon-name: "media-playback-start-symbolic";
+                        tooltip-text: _("Execute command");
+                        action-name: "ai.execute-command";
+
+                        styles ["flat", "circular", "suggested-action"]
+                      }
+
+                      Gtk.Button {
+                        icon-name: "edit-copy-symbolic";
+                        tooltip-text: _("Copy to clipboard");
+                        action-name: "ai.copy-response";
+
+                        styles ["flat", "circular"]
+                      }
+                    }
+                  }
+                };
+              }
+            };
+          }
+        }
+
+        Gtk.Label loading_label {
+          label: _("Thinking...");
+          halign: center;
+          valign: center;
+          visible: false;
+          vexpand: true;
+          styles ["dim-label", "heading"]
+        }
+      }
+    }
+  }
+}

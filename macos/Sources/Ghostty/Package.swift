@@ -397,6 +397,12 @@ extension Notification.Name {
     static let ReadonlyKey = ghosttyDidChangeReadonly.rawValue + ".readonly"
     static let ghosttyCommandPaletteDidToggle = Notification.Name("com.mitchellh.ghostty.commandPaletteDidToggle")
 
+    /// Toggle AI input mode
+    static let ghosttyAiInputModeDidToggle = Notification.Name("com.mitchellh.ghostty.aiInputModeDidToggle")
+
+    /// Toggle AI command search
+    static let ghosttyAiCommandSearchDidToggle = Notification.Name("com.mitchellh.ghostty.aiCommandSearchDidToggle")
+
     /// Toggle maximize of current window
     static let ghosttyMaximizeDidToggle = Notification.Name("com.mitchellh.ghostty.maximizeDidToggle")
 

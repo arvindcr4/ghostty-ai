@@ -1,0 +1,136 @@
+using Gtk 4.0;
+using Gio 2.0;
+using Adw 1;
+
+Adw.Dialog dialog {
+  content-width: 700;
+  height: 400;
+  closed => $closed();
+
+  Adw.ToolbarView {
+    top-bar-style: raised;
+
+    [top]
+    Adw.HeaderBar {
+      title-widget: Adw.WindowTitle {
+        title: _("AI Command Search");
+        subtitle: _("Type natural language to find commands");
+      };
+
+      [end]
+      Gtk.Button close_btn {
+        icon-name: "window-close-symbolic";
+        tooltip-text: _("Close");
+        clicked => $close();
+      }
+    }
+  }
+
+  Gtk.Box {
+    orientation: vertical;
+    spacing: 12;
+    margin-start: 12;
+    margin-end: 12;
+    margin-top: 12;
+    margin-bottom: 12;
+
+    // Search entry
+    Gtk.Entry search_entry {
+      placeholder-text: _("Describe the command you're looking for...");
+      hexpand: true;
+      activate => $search_activated();
+      changed => $search_changed();
+    }
+
+    // Results list
+    Gtk.ScrolledWindow {
+      vexpand: true;
+      min-content-height: 200;
+
+      Gtk.ListView results_list {
+        single-click-activate: true;
+        model: Gtk.SingleSelection results_selection {
+          model: Gio.ListStore results_store {
+            item-type: typeof <$CommandSuggestion>;
+          };
+        };
+
+        factory: Gtk.BuilderListItemFactory {
+          template Gtk.ListItem {
+            child: Gtk.Box {
+              orientation: vertical;
+              spacing: 4;
+              margin-start: 12;
+              margin-end: 12;
+              margin-top: 8;
+              margin-bottom: 8;
+
+              // Command text
+              Gtk.Label command_label {
+                halign: start;
+                xalign: 0;
+                label: bind template.item as <$CommandSuggestion>.command;
+                wrap: true;
+                styles ["heading", "mono"]
+              }
+
+              // Explanation
+              Gtk.Label explanation_label {
+                halign: start;
+                xalign: 0;
+                label: bind template.item as <$CommandSuggestion>.explanation;
+                wrap: true;
+                lines: 2;
+                ellipsize: end;
+                styles ["dim-label", "caption"]
+              }
+
+              // Context badge
+              Gtk.Label context_label {
+                halign: start;
+                xalign: 0;
+                label: bind template.item as <$CommandSuggestion>.context;
+                visible: bind template.item as <$CommandSuggestion>.has_context;
+                wrap: true;
+                styles ["caption", "success"]
+              }
+            };
+          }
+        };
+
+        activate => $suggestion_activated();
+      }
+    }
+
+    // Loading indicator
+    Gtk.Label loading_label {
+      label: _("Searching...");
+      halign: center;
+      valign: center;
+      visible: false;
+      vexpand: true;
+      styles ["dim-label", "heading"]
+    }
+
+    // No results label
+    Gtk.Label no_results_label {
+      label: _("No matching commands found");
+      halign: center;
+      valign: center;
+      visible: false;
+      vexpand: true;
+      styles ["dim-label"]
+    }
+
+    // Help text
+    Gtk.Label help_label {
+      label: _("Type a natural language description to search your command history.
+                 Press Enter to execute the selected command.");
+      halign: center;
+      wrap: true;
+      justify: center;
+      margin-top: 12;
+      styles ["dim-label", "caption"]
+    }
+  }
+}

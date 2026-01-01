@@ -112,6 +112,15 @@ pub const Action = union(Key) {
     /// Toggle the command palette. This currently only works on macOS.
     toggle_command_palette,
 
+    /// Open the AI input mode dialog.
+    ai_input_mode,
+
+    /// Open the AI command search dialog.
+    ai_command_search,
+
+    /// Show smart completions for the current command.
+    ai_completions,
+
     /// Toggle the visibility of all Ghostty terminal windows.
     toggle_visibility,
 
@@ -342,6 +351,9 @@ pub const Action = union(Key) {
         toggle_window_decorations,
         toggle_quick_terminal,
         toggle_command_palette,
+        ai_input_mode,
+        ai_command_search,
+        ai_completions,
         toggle_visibility,
         toggle_background_opacity,
         move_tab,

@@ -722,6 +722,43 @@ pub const Action = union(enum) {
     /// version can be found by running `ghostty +version`.
     toggle_command_palette,
 
+    /// Open the AI assistant input mode.
+    ///
+    /// The AI assistant provides Warp-like intelligent features to help you
+    /// work more efficiently in the terminal. When triggered, this opens a
+    /// dialog where you can type questions or select text for AI assistance.
+    ///
+    /// Features include:
+    ///   - Explaining commands and outputs
+    ///   - Debugging errors and suggesting fixes
+    ///   - Optimizing terminal workflows
+    ///   - Writing and improving shell scripts
+    ///
+    /// This requires AI features to be enabled and configured in your
+    /// Ghostty config (see `ai-enabled`, `ai-provider`, etc.).
+    ///
+    /// Available since: 1.5.0
+    ai_input_mode,
+
+    /// Open AI command search mode (similar to Warp Terminal's '#' feature).
+    ///
+    /// This activates a search interface where you can type natural language
+    /// queries to find commands from your terminal history. For example:
+    ///
+    ///   - "list all docker containers" → suggests `docker ps`
+    ///   - "compress files" → suggests `tar -czf archive.tar.gz files/`
+    ///   - "check disk space" → suggests `df -h`
+    ///
+    /// The AI will search your command history and suggest relevant commands
+    /// with explanations. You can also press '#' in the terminal to quickly
+    /// activate this mode.
+    ///
+    /// This requires AI features to be enabled and configured in your
+    /// Ghostty config (see `ai-enabled`, `ai-provider`, etc.).
+    ///
+    /// Available since: 1.5.0
+    ai_command_search,
+
     /// Toggle the quick terminal.
     ///
     /// The quick terminal, also known as the "Quake-style" or drop-down
@@ -1323,6 +1360,8 @@ pub const Action = union(enum) {
             .toggle_secure_input,
             .toggle_mouse_reporting,
             .toggle_command_palette,
+            .ai_input_mode,
+            .ai_command_search,
             .toggle_background_opacity,
             .show_on_screen_keyboard,
             .reset_window_size,

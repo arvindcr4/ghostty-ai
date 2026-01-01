@@ -831,6 +831,9 @@ typedef enum {
   GHOSTTY_ACTION_TOGGLE_WINDOW_DECORATIONS,
   GHOSTTY_ACTION_TOGGLE_QUICK_TERMINAL,
   GHOSTTY_ACTION_TOGGLE_COMMAND_PALETTE,
+  GHOSTTY_ACTION_AI_INPUT_MODE,
+  GHOSTTY_ACTION_AI_COMMAND_SEARCH,
+  GHOSTTY_ACTION_AI_COMPLETIONS,
   GHOSTTY_ACTION_TOGGLE_VISIBILITY,
   GHOSTTY_ACTION_TOGGLE_BACKGROUND_OPACITY,
   GHOSTTY_ACTION_MOVE_TAB,
@@ -1127,6 +1130,51 @@ void ghostty_set_window_background_blur(ghostty_app_t, void*);
 
 // Benchmark API, if available.
 bool ghostty_benchmark_cli(const char*, const char*);
+
+// AI Assistant API
+typedef void* ghostty_ai_t;
+
+typedef struct {
+    const char* content;
+    uintptr_t content_len;
+    const char* provider;
+    bool success;
+    const char* error_message;
+} ghostty_ai_response_s;
+
+typedef void (*ghostty_ai_callback_t)(const char* chunk, uintptr_t chunk_len, bool done, void* userdata);
+
+// Create AI assistant from app config
+ghostty_ai_t ghostty_ai_new(ghostty_app_t app);
+
+// Free AI assistant
+void ghostty_ai_free(ghostty_ai_t ai);
+
+// Check if AI is ready (configured with provider and API key)
+bool ghostty_ai_is_ready(ghostty_ai_t ai);
+
+// Send a chat request (blocking)
+ghostty_ai_response_s ghostty_ai_chat(
+    ghostty_ai_t ai,
+    const char* prompt,
+    uintptr_t prompt_len,
+    const char* context,
+    uintptr_t context_len
+);
+
+// Send a streaming chat request (async with callback)
+bool ghostty_ai_chat_stream(
+    ghostty_ai_t ai,
+    const char* prompt,
+    uintptr_t prompt_len,
+    const char* context,
+    uintptr_t context_len,
+    ghostty_ai_callback_t callback,
+    void* userdata
+);
+
+// Free AI response
+void ghostty_ai_response_free(ghostty_ai_t ai, ghostty_ai_response_s* response);
 
 #ifdef __cplusplus
 }

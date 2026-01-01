@@ -33,6 +33,12 @@ protocol TerminalViewModel: ObservableObject {
     /// The command palette state.
     var commandPaletteIsShowing: Bool { get set }
     
+    /// The AI input mode state.
+    var aiInputModeIsShowing: Bool { get set }
+    
+    /// The AI command search state.
+    var aiCommandSearchIsShowing: Bool { get set }
+    
     /// The update overlay should be visible.
     var updateOverlayIsVisible: Bool { get }
 }
@@ -114,6 +120,13 @@ struct TerminalView<ViewModel: TerminalViewModel>: View {
                         ghosttyConfig: ghostty.config,
                         updateViewModel: (NSApp.delegate as? AppDelegate)?.updateViewModel) { action in
                         self.delegate?.performAction(action, on: surfaceView)
+                    }
+                    
+                    // Show AI input mode when requested
+                    if viewModel.aiInputModeIsShowing {
+                        AIInputModeView(surfaceView: surfaceView)
+                            .environmentObject(ghostty)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }
                 

@@ -2057,6 +2057,82 @@ pub fn pwd(
     return try alloc.dupe(u8, terminal_pwd);
 }
 
+/// Returns the selected text as a regular allocated slice (not null-terminated).
+/// This is a convenience wrapper for selectionString() that converts the result.
+pub fn getSelectedText(self: *Surface, alloc: Allocator) !?[]const u8 {
+    const result = try self.selectionString(alloc);
+    if (result) |s| {
+        // Duplicate as non-null-terminated slice
+        return try alloc.dupe(u8, s);
+    }
+    return null;
+}
+
+/// Returns terminal history (scrollback) as a string.
+/// The `lines` parameter specifies how many lines of history to retrieve.
+/// Returns null if there's no history available.
+pub fn getTerminalHistory(self: *Surface, alloc: Allocator, lines: u32) !?[]const u8 {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+
+    const active_terminal = &self.io.terminal.screens.active;
+
+    // Get the bottom-right of the history (scrollback only, not current screen)
+    const br_pin = active_terminal.pages.getBottomRight(.history) orelse {
+        // No history available
+        return null;
+    };
+
+    // Get top-left of history
+    const tl_pin = active_terminal.pages.getTopLeft(.history);
+
+    // If lines is 0 or the max value, get all history
+    if (lines == 0 or lines == std.math.maxInt(u32)) {
+        // Use dumpStringAlloc with history pins
+        var builder: std.Io.Writer.Allocating = .init(alloc);
+        defer builder.deinit();
+
+        terminal.dumpString(&builder.writer, .{
+            .tl = tl_pin,
+            .br = br_pin,
+            .unwrap = true,
+        }) catch |err| {
+            log.warn("Failed to extract terminal history: {}", .{err});
+            return null;
+        };
+
+        return builder.toOwnedSlice() catch null;
+    }
+
+    // Limited line count: iterate and count lines
+    var result = std.ArrayList(u8).init(alloc);
+    errdefer result.deinit();
+
+    var line_count: u32 = 0;
+    const max_lines = lines;
+
+    // Create a row iterator from history
+    var row_it = tl_pin.rowIterator(.right_down, br_pin);
+
+    // Iterate through rows and collect up to max_lines
+    while (row_it.next()) |row_pin| {
+        if (line_count >= max_lines) break;
+
+        // Get the row string
+        const row = row_pin.row;
+        for (row.cells[0..row.size.cols]) |cell| {
+            if (cell.width > 0) {
+                try result.appendSlice(cell.str());
+            }
+        }
+
+        try result.append('\n');
+        line_count += 1;
+    }
+
+    return result.toOwnedSlice() catch null;
+}
+
 /// Resolves a relative file path to an absolute path using the terminal's pwd.
 fn resolvePathForOpening(
     self: *Surface,
@@ -5668,6 +5744,18 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
         .toggle_command_palette => return try self.rt_app.performAction(
             .{ .surface = self },
             .toggle_command_palette,
+            {},
+        ),
+
+        .ai_input_mode => return try self.rt_app.performAction(
+            .{ .surface = self },
+            .ai_input_mode,
+            {},
+        ),
+
+        .ai_command_search => return try self.rt_app.performAction(
+            .{ .surface = self },
+            .ai_command_search,
             {},
         ),
 

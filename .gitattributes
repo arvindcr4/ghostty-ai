@@ -11,3 +11,6 @@ pkg/simdutf/vendor/** linguist-vendored
 src/font/nerd_font_attributes.zig linguist-generated=true
 src/font/nerd_font_codepoint_tables.py linguist-generated=true
 src/terminal/res/** linguist-vendored
+
+# Use bd merge for beads JSONL files
+.beads/issues.jsonl merge=beads
