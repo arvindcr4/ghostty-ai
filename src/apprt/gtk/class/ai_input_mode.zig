@@ -131,7 +131,7 @@ pub const AiInputMode = extern struct {
         pub extern fn gtk_gesture_single_get_type() gobject.Type;
         pub extern fn gtk_event_controller_key_get_type() gobject.Type;
 
-        fn responseItemInit(self: *@This()) callconv(.C) void {
+        fn responseItemInit(self: *@This()) callconv(.c) void {
             const priv = gobject.ext.getPriv(self, &ResponseItemPrivate.offset);
             priv.* = .{};
             self.content = "";
@@ -143,7 +143,7 @@ pub const AiInputMode = extern struct {
             pub fn init(
                 klass: *gobject.Class.Type,
                 _: ?*anyopaque,
-            ) callconv(.C) void {
+            ) callconv(.c) void {
                 klass.parent = gobject.ext.initClass(ResponseItemParent, .{
                     .name = "GhosttyAiResponseItem",
                     .instance_size = @sizeOf(@This()),
@@ -349,7 +349,7 @@ pub const AiInputMode = extern struct {
         return self.ref();
     }
 
-    fn init(self: *Self) callconv(.C) void {
+    fn init(self: *Self) callconv(.c) void {
         const priv = getPriv(self);
         const alloc = Application.default().allocator();
         priv.* = .{
@@ -358,6 +358,9 @@ pub const AiInputMode = extern struct {
 
         // Bind the template
         gtk.Widget.initTemplate(self.as(gtk.Widget));
+
+        // TextView doesn't have a named buffer in the template; capture it now.
+        priv.input_buffer = priv.input_view.getBuffer();
 
         // Initialize prompt suggestion service
         priv.prompt_suggestion_service = PromptSuggestionService.init(alloc, 5);
@@ -398,29 +401,65 @@ pub const AiInputMode = extern struct {
         self.as(gtk.Widget).insertActionGroup("ai", action_group.as(gio.ActionGroup));
 
         // Prompt suggestions while typing
-        _ = priv.input_buffer.connectChanged(*Self, inputBufferChanged, self, .{});
+        _ = gtk.TextBuffer.signals.changed.connect(priv.input_buffer, *Self, inputBufferChanged, self, .{});
 
-        priv.suggestion_popup = gtk.Popover.new(priv.input_view.as(gtk.Widget));
+        priv.suggestion_popup = gtk.Popover.new();
+        priv.suggestion_popup.?.setAutohide(@intFromBool(true));
+        priv.suggestion_popup.?.setHasArrow(@intFromBool(false));
         priv.suggestion_popup.?.setPosition(gtk.PositionType.top);
+        priv.suggestion_popup.?.as(gtk.Widget).setParent(priv.input_view.as(gtk.Widget));
 
         priv.suggestion_list = gtk.ListBox.new();
         priv.suggestion_list.?.setSelectionMode(gtk.SelectionMode.single);
-        _ = priv.suggestion_list.?.connectRowActivated(*Self, suggestionRowActivated, self, .{});
+        priv.suggestion_list.?.setActivateOnSingleClick(@intFromBool(true));
+        _ = gtk.ListBox.signals.row_activated.connect(priv.suggestion_list.?, *Self, suggestionRowActivated, self, .{});
 
-        const scrolled = gtk.ScrolledWindow.new(null, null);
+        const scrolled = gtk.ScrolledWindow.new();
         scrolled.setPolicy(gtk.PolicyType.never, gtk.PolicyType.automatic);
         scrolled.setMaxContentHeight(200);
         scrolled.setChild(priv.suggestion_list.?.as(gtk.Widget));
         priv.suggestion_popup.?.setChild(scrolled.as(gtk.Widget));
     }
 
-    fn agent_toggled(button: *gtk.ToggleButton, self: *Self) callconv(.C) void {
+    fn dispose(self: *Self) callconv(.c) void {
+        const priv = getPriv(self);
+        const alloc = Application.default().allocator();
+
+        self.hideSuggestions();
+
+        for (priv.current_suggestions.items) |*suggestion| suggestion.deinit(alloc);
+        priv.current_suggestions.deinit();
+
+        if (priv.streaming_response) |*buf| {
+            buf.deinit();
+            priv.streaming_response = null;
+        }
+        priv.streaming_response_item = null;
+
+        if (priv.last_prompt) |prompt| alloc.free(prompt);
+        priv.last_prompt = null;
+
+        if (priv.last_context) |ctx| alloc.free(ctx);
+        priv.last_context = null;
+
+        if (priv.selected_text) |text| alloc.free(text);
+        priv.selected_text = null;
+
+        if (priv.terminal_context) |ctx| alloc.free(ctx);
+        priv.terminal_context = null;
+
+        gtk.Widget.disposeTemplate(self.as(gtk.Widget), getGObjectType());
+
+        gobject.Object.virtual_methods.dispose.call(Class.parent, self.as(Parent));
+    }
+
+    fn agent_toggled(button: *gtk.ToggleButton, self: *Self) callconv(.c) void {
         const priv = getPriv(self);
         priv.agent_mode = button.getActive() != 0;
     }
 
     /// Action handler for copying the selected response to clipboard
-    fn copyResponseActivated(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.C) void {
+    fn copyResponseActivated(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
         _ = action;
         _ = param;
 
@@ -451,7 +490,7 @@ pub const AiInputMode = extern struct {
     }
 
     /// Action handler for executing command from AI response
-    fn executeCommandActivated(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.C) void {
+    fn executeCommandActivated(action: *gio.SimpleAction, param: ?*glib.Variant, self: *Self) callconv(.c) void {
         _ = action;
         _ = param;
 
@@ -687,30 +726,83 @@ pub const AiInputMode = extern struct {
         return commands;
     }
 
-    pub const Class = struct {
-        parent: Parent.Class,
+    pub const Class = extern struct {
+        parent_class: Parent.Class,
+        var parent: *Parent.Class = undefined;
+        pub const Instance = Self;
 
-        pub fn init(
-            klass: *gobject.Class.Type,
-            _: ?*anyopaque,
-        ) callconv(.C) void {
-            klass.parent = gobject.ext.initClass(Parent, .{
-                .name = "GhosttyAiInputMode",
-                .instance_size = @sizeOf(Self),
-                .class_size = @sizeOf(Class),
-            }).?;
+        fn init(class: *Class) callconv(.c) void {
+            gobject.ext.ensureType(ResponseItem);
+
+            gtk.Widget.Class.setTemplateFromResource(
+                class.as(gtk.Widget.Class),
+                comptime gresource.blueprint(.{
+                    .major = 1,
+                    .minor = 5,
+                    .name = "ai-input-mode",
+                }),
+            );
+
+            class.bindTemplateChildPrivate("dialog", .{});
+            class.bindTemplateChildPrivate("template_dropdown", .{});
+            class.bindTemplateChildPrivate("agent_toggle", .{});
+            class.bindTemplateChildPrivate("input_view", .{});
+            class.bindTemplateChildPrivate("response_view", .{});
+            class.bindTemplateChildPrivate("response_store", .{});
+            class.bindTemplateChildPrivate("loading_label", .{});
+            class.bindTemplateChildPrivate("context_label", .{});
+            class.bindTemplateChildPrivate("context_chips", .{});
+            class.bindTemplateChildPrivate("selection_chip", .{});
+            class.bindTemplateChildPrivate("history_chip", .{});
+            class.bindTemplateChildPrivate("directory_chip", .{});
+            class.bindTemplateChildPrivate("directory_label", .{});
+            class.bindTemplateChildPrivate("git_chip", .{});
+            class.bindTemplateChildPrivate("git_label", .{});
+
+            class.bindTemplateCallback("closed", &closed);
+            class.bindTemplateCallback("template_changed", &template_changed);
+            class.bindTemplateCallback("agent_toggled", &agent_toggled);
+            class.bindTemplateCallback("send_clicked", &send_clicked);
+            class.bindTemplateCallback("stop_clicked", &stop_clicked);
+            class.bindTemplateCallback("regenerate_clicked", &regenerate_clicked);
+
+            gobject.ext.registerProperties(class, &.{
+                properties.config.impl,
+                properties.send_sensitive.impl,
+                properties.stop_sensitive.impl,
+                properties.regenerate_sensitive.impl,
+            });
+
+            gobject.Object.virtual_methods.dispose.implement(class, &dispose);
         }
+
+        pub const as = C.Class.as;
+        pub const bindTemplateChildPrivate = C.Class.bindTemplateChildPrivate;
+        pub const bindTemplateCallback = C.Class.bindTemplateCallback;
     };
 
     /// Show the AI input dialog
     pub fn show(self: *Self, win: *Window, selected_text: ?[]const u8, terminal_context: ?[]const u8) void {
         const priv = getPriv(self);
-        priv.selected_text = selected_text;
-        priv.terminal_context = terminal_context;
+        const alloc = Application.default().allocator();
+
+        if (priv.selected_text) |old| alloc.free(old);
+        if (priv.terminal_context) |old| alloc.free(old);
+
+        priv.selected_text = if (selected_text) |text|
+            alloc.dupe(u8, text) catch null
+        else
+            null;
+
+        priv.terminal_context = if (terminal_context) |ctx|
+            alloc.dupe(u8, ctx) catch null
+        else
+            null;
+
         priv.window = win;
 
         // Update context label if we have selection
-        if (selected_text != null) {
+        if (priv.selected_text != null) {
             priv.context_label.setVisible(true);
         } else {
             priv.context_label.setVisible(false);
@@ -850,8 +942,9 @@ pub const AiInputMode = extern struct {
     }
 
     /// Signal handler for dialog close
-    fn closed(dialog: *adw.Dialog, self: *Self) callconv(.C) void {
+    fn closed(dialog: *adw.Dialog, self: *Self) callconv(.c) void {
         const priv = getPriv(self);
+        const alloc = Application.default().allocator();
 
         // Clear the response store
         const n_items: c_uint = @intCast(priv.response_store.nItems());
@@ -861,6 +954,16 @@ pub const AiInputMode = extern struct {
 
         // Clear the input buffer
         priv.input_buffer.setText("", -1);
+
+        self.hideSuggestions();
+
+        if (priv.selected_text) |text| alloc.free(text);
+        priv.selected_text = null;
+
+        if (priv.terminal_context) |ctx| alloc.free(ctx);
+        priv.terminal_context = null;
+
+        priv.window = null;
 
         // Hide the dialog
         dialog.forceClose();
@@ -893,7 +996,7 @@ pub const AiInputMode = extern struct {
             if (std.mem.indexOf(u8, result, pattern.prefix)) |idx| {
                 var end = idx + pattern.prefix.len;
                 while (end < result.len and
-                       (std.ascii.isAlphanumeric(result[end]) or
+                    (std.ascii.isAlphanumeric(result[end]) or
                         result[end] == '-' or
                         result[end] == '_' or
                         result[end] == '!' or
@@ -907,7 +1010,8 @@ pub const AiInputMode = extern struct {
                         result[end] == '(' or
                         result[end] == ')' or
                         result[end] == '+' or
-                        result[end] == '=')) {
+                        result[end] == '='))
+                {
                     end += 1;
                 }
 
@@ -926,7 +1030,7 @@ pub const AiInputMode = extern struct {
     }
 
     /// Signal handler for send button click
-    fn send_clicked(button: *gtk.Button, self: *Self) callconv(.C) void {
+    fn send_clicked(button: *gtk.Button, self: *Self) callconv(.c) void {
         _ = button;
         const priv = getPriv(self);
         const config = priv.config orelse return;
@@ -1156,7 +1260,7 @@ pub const AiInputMode = extern struct {
     }
 
     /// Callback to initialize streaming state on main thread
-    fn streamInitCallback(data: ?*anyopaque) callconv(.C) c_int {
+    fn streamInitCallback(data: ?*anyopaque) callconv(.c) c_int {
         const chunk: *StreamChunk = @ptrCast(@alignCast(data));
         const alloc = Application.default().allocator();
         defer alloc.destroy(chunk);
@@ -1182,7 +1286,7 @@ pub const AiInputMode = extern struct {
     }
 
     /// Callback to handle streaming chunks on main thread
-    fn streamChunkCallback(data: ?*anyopaque) callconv(.C) c_int {
+    fn streamChunkCallback(data: ?*anyopaque) callconv(.c) c_int {
         const chunk: *StreamChunk = @ptrCast(@alignCast(data));
         const alloc = Application.default().allocator();
         defer alloc.destroy(chunk);
@@ -1266,7 +1370,7 @@ pub const AiInputMode = extern struct {
         return 0; // G_SOURCE_REMOVE
     }
 
-    fn aiResultCallback(data: ?*anyopaque) callconv(.C) c_int {
+    fn aiResultCallback(data: ?*anyopaque) callconv(.c) c_int {
         const result: *AiResult = @ptrCast(@alignCast(data));
         const alloc = Application.default().allocator();
         defer alloc.destroy(result);
@@ -1305,7 +1409,7 @@ pub const AiInputMode = extern struct {
     }
 
     /// Signal handler for template dropdown change
-    fn template_changed(dropdown: *gtk.DropDown, param: *gobject.ParamSpec, self: *Self) callconv(.C) void {
+    fn template_changed(dropdown: *gtk.DropDown, param: *gobject.ParamSpec, self: *Self) callconv(.c) void {
         _ = dropdown;
         _ = param;
         _ = self;
@@ -1314,7 +1418,7 @@ pub const AiInputMode = extern struct {
     }
 
     /// Signal handler for stop button click
-    fn stop_clicked(button: *gtk.Button, self: *Self) callconv(.C) void {
+    fn stop_clicked(button: *gtk.Button, self: *Self) callconv(.c) void {
         _ = button;
         const priv = getPriv(self);
 
@@ -1340,7 +1444,7 @@ pub const AiInputMode = extern struct {
     }
 
     /// Signal handler for regenerate button click
-    fn regenerate_clicked(button: *gtk.Button, self: *Self) callconv(.C) void {
+    fn regenerate_clicked(button: *gtk.Button, self: *Self) callconv(.c) void {
         _ = button;
         const priv = getPriv(self);
         const alloc = Application.default().allocator();
@@ -1590,7 +1694,7 @@ pub const AiInputMode = extern struct {
             }
 
             // Bold: **text** or __text__
-            if (i + 2 <= input_len and (std.mem.eql(u8, input[i .. @min(i + 2, input_len)], "**") or std.mem.eql(u8, input[i .. @min(i + 2, input_len)], "__"))) {
+            if (i + 2 <= input_len and (std.mem.eql(u8, input[i..@min(i + 2, input_len)], "**") or std.mem.eql(u8, input[i..@min(i + 2, input_len)], "__"))) {
                 const marker = input[i .. i + 2];
                 const end_idx = std.mem.indexOfPos(u8, input, i + 2, marker) orelse {
                     try Escape.append(&result, input[i .. i + 1]);
@@ -1627,7 +1731,7 @@ pub const AiInputMode = extern struct {
     }
 
     /// Handle text buffer changes for prompt suggestions
-    fn inputBufferChanged(buffer: *gtk.TextBuffer, self: *Self) callconv(.C) void {
+    fn inputBufferChanged(buffer: *gtk.TextBuffer, self: *Self) callconv(.c) void {
         _ = buffer;
         const priv = getPriv(self);
         const alloc = Application.default().allocator();
@@ -1697,6 +1801,11 @@ pub const AiInputMode = extern struct {
 
             // Add new suggestions
             for (priv.current_suggestions.items) |suggestion| {
+                const completion_z = alloc.dupeZ(u8, suggestion.completion) catch continue;
+                defer alloc.free(completion_z);
+                const desc_z = alloc.dupeZ(u8, suggestion.description) catch continue;
+                defer alloc.free(desc_z);
+
                 const row = gtk.ListBoxRow.new();
                 const box = gtk.Box.new(gtk.Orientation.vertical, 4);
                 const box_widget = box.as(gtk.Widget);
@@ -1706,14 +1815,14 @@ pub const AiInputMode = extern struct {
                 box_widget.setMarginEnd(12);
 
                 // Completion text
-                const completion_label = gtk.Label.new(suggestion.completion);
+                const completion_label = gtk.Label.new(completion_z);
                 completion_label.setXAlign(0);
                 completion_label.setUseMarkup(false);
                 completion_label.getStyleContext().addClass("heading");
                 box.append(completion_label.as(gtk.Widget));
 
                 // Description text
-                const desc_label = gtk.Label.new(suggestion.description);
+                const desc_label = gtk.Label.new(desc_z);
                 desc_label.setXAlign(0);
                 desc_label.setUseMarkup(false);
                 desc_label.getStyleContext().addClass("dim-label");
@@ -1750,7 +1859,7 @@ pub const AiInputMode = extern struct {
     }
 
     /// Handle suggestion selection
-    fn suggestionRowActivated(list: *gtk.ListBox, row: *gtk.ListBoxRow, self: *Self) callconv(.C) void {
+    fn suggestionRowActivated(list: *gtk.ListBox, row: *gtk.ListBoxRow, self: *Self) callconv(.c) void {
         _ = list;
         const priv = getPriv(self);
 
@@ -1761,15 +1870,19 @@ pub const AiInputMode = extern struct {
         const suggestion = priv.current_suggestions.items[@intCast(index)];
 
         // Insert suggestion into input buffer
-        const start: gtk.TextIter = undefined;
-        const end: gtk.TextIter = undefined;
+        var start: gtk.TextIter = undefined;
+        var end: gtk.TextIter = undefined;
         priv.input_buffer.getBounds(&start, &end);
         priv.input_buffer.delete(&start, &end);
-        priv.input_buffer.insert(&start, suggestion.completion, -1);
+        priv.input_buffer.insert(
+            &start,
+            @ptrCast(suggestion.completion.ptr),
+            @intCast(suggestion.completion.len),
+        );
 
         // Hide suggestions
         self.hideSuggestions();
 
-        log.info("Applied prompt suggestion: {}", .{suggestion.completion});
+        log.info("Applied prompt suggestion: {s}", .{suggestion.completion});
     }
 };

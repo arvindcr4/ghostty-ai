@@ -69,14 +69,14 @@ pub const BlocksDialog = extern struct {
         return self.ref();
     }
 
-    fn init(self: *Self) callconv(.C) void {
+    fn init(self: *Self) callconv(.c) void {
         const priv = getPriv(self);
         priv.* = .{};
 
         gtk.Widget.initTemplate(self.as(gtk.Widget));
     }
 
-    fn dispose(self: *Self) callconv(.C) void {
+    fn dispose(self: *Self) callconv(.c) void {
         const priv = getPriv(self);
         const alloc = Application.default().allocator();
         for (priv.blocks.items) |*block| block.deinit(alloc);
@@ -103,12 +103,17 @@ pub const BlocksDialog = extern struct {
         _ = priv.search_entry.as(gtk.Widget).grabFocus();
     }
 
-    fn closed(_: *adw.Dialog, self: *Self) callconv(.C) void {
+    fn closed(_: *adw.Dialog, self: *Self) callconv(.c) void {
         const priv = getPriv(self);
         priv.dialog.forceClose();
     }
 
-    fn refresh_clicked(_: *gtk.Button, self: *Self) callconv(.C) void {
+    fn close(_: *gtk.Button, self: *Self) callconv(.c) void {
+        const priv = getPriv(self);
+        priv.dialog.forceClose();
+    }
+
+    fn refresh_clicked(_: *gtk.Button, self: *Self) callconv(.c) void {
         const priv = getPriv(self);
         const surface = priv.window orelse return;
         const core_surface = surface.getActiveSurface() orelse return;
@@ -116,11 +121,11 @@ pub const BlocksDialog = extern struct {
         self.refreshBlocks(core);
     }
 
-    fn search_changed(_: *gtk.SearchEntry, self: *Self) callconv(.C) void {
+    fn search_changed(_: *gtk.SearchEntry, self: *Self) callconv(.c) void {
         self.applyFilter();
     }
 
-    fn filter_toggled(_: *gtk.ToggleButton, self: *Self) callconv(.C) void {
+    fn filter_toggled(_: *gtk.ToggleButton, self: *Self) callconv(.c) void {
         self.applyFilter();
     }
 
@@ -230,7 +235,7 @@ pub const BlocksDialog = extern struct {
         var parent: *Parent.Class = undefined;
         pub const Instance = Self;
 
-        fn init(class: *Class) callconv(.C) void {
+        fn init(class: *Class) callconv(.c) void {
             gobject.ext.ensureType(BlockItem);
             gtk.Widget.Class.setTemplateFromResource(
                 class.as(gtk.Widget.Class),
@@ -250,6 +255,7 @@ pub const BlocksDialog = extern struct {
             class.bindTemplateChildPrivate("empty_label", .{});
 
             class.bindTemplateCallback("closed", &closed);
+            class.bindTemplateCallback("close", &close);
             class.bindTemplateCallback("search_changed", &search_changed);
             class.bindTemplateCallback("filter_toggled", &filter_toggled);
             class.bindTemplateCallback("refresh_clicked", &refresh_clicked);
@@ -346,7 +352,7 @@ const BlockItem = extern struct {
         return item;
     }
 
-    fn init(self: *Self) callconv(.C) void {
+    fn init(self: *Self) callconv(.c) void {
         const priv = gobject.ext.getPriv(self, &Private.offset);
         priv.* = .{};
     }
@@ -395,7 +401,7 @@ const BlockItem = extern struct {
         var parent: *Parent.Class = undefined;
         pub const Instance = Self;
 
-        fn init(class: *Class) callconv(.C) void {
+        fn init(class: *Class) callconv(.c) void {
             gobject.ext.registerProperties(class, &.{
                 properties.command.impl,
                 properties.output_preview.impl,
@@ -405,7 +411,7 @@ const BlockItem = extern struct {
         }
     };
 
-    fn finalize(self: *Self) callconv(.C) void {
+    fn finalize(self: *Self) callconv(.c) void {
         const priv = gobject.ext.getPriv(self, &Private.offset);
         const alloc = Application.default().allocator();
         if (priv.command_owned) alloc.free(priv.command);
