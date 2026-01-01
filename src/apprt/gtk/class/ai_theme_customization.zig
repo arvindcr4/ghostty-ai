@@ -91,11 +91,11 @@ pub const ThemeCustomizationDialog = extern struct {
 
         pub fn new(alloc: Allocator, name: []const u8, description: []const u8, colors: []const u8) !*ThemeItem {
             const self = gobject.ext.newInstance(ThemeItem, .{});
-            self.name = try alloc.dupe(u8, name);
+            self.name = try alloc.dupeZ(u8, name);
             errdefer alloc.free(self.name);
-            self.description = try alloc.dupe(u8, description);
+            self.description = try alloc.dupeZ(u8, description);
             errdefer alloc.free(self.description);
-            self.colors = try alloc.dupe(u8, colors);
+            self.colors = try alloc.dupeZ(u8, colors);
             errdefer alloc.free(self.colors);
             return self;
         }
