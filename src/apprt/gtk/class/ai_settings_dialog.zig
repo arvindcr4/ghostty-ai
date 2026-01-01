@@ -31,14 +31,14 @@ pub const AiSettingsDialog = extern struct {
 
     const Private = struct {
         config: ?*Config = null,
-        provider_dropdown: ?*gtk.DropDown = null,
-        model_dropdown: ?*gtk.DropDown = null,
-        api_key_entry: ?*gtk.Entry = null,
-        endpoint_entry: ?*gtk.Entry = null,
-        max_tokens_spin: ?*gtk.SpinButton = null,
-        temperature_scale: ?*gtk.Scale = null,
+        provider_row: ?*adw.ComboRow = null,
+        model_row: ?*adw.ComboRow = null,
+        api_key_row: ?*adw.EntryRow = null,
+        endpoint_row: ?*adw.EntryRow = null,
+        max_tokens_row: ?*adw.SpinRow = null,
+        temperature_row: ?*adw.SpinRow = null,
         context_aware_switch: ?*gtk.Switch = null,
-        context_lines_spin: ?*gtk.SpinButton = null,
+        context_lines_row: ?*adw.SpinRow = null,
 
         pub var offset: c_int = 0;
     };
@@ -53,6 +53,14 @@ pub const AiSettingsDialog = extern struct {
 
         pub const as = C.Class.as;
     };
+
+    pub const getGObjectType = gobject.ext.defineClass(Self, .{
+        .name = "GhosttyAiSettingsDialog",
+        .instanceInit = &init,
+        .classInit = &Class.init,
+        .parent_class = &Class.parent,
+        .private = .{ .Type = Private, .offset = &Private.offset },
+    });
 
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
@@ -80,13 +88,13 @@ pub const AiSettingsDialog = extern struct {
         const provider_row = adw.ComboRow.new();
         provider_row.setTitle("Provider");
         provider_row.setSubtitle("Select AI provider");
-        priv.provider_dropdown = provider_row.as(gtk.DropDown);
+        priv.provider_row = provider_row;
         provider_group.add(provider_row.as(gtk.Widget));
 
         const model_row = adw.ComboRow.new();
         model_row.setTitle("Model");
         model_row.setSubtitle("Select AI model");
-        priv.model_dropdown = model_row.as(gtk.DropDown);
+        priv.model_row = model_row;
         provider_group.add(model_row.as(gtk.Widget));
 
         page.add(provider_group.as(gtk.Widget));
@@ -100,13 +108,13 @@ pub const AiSettingsDialog = extern struct {
         api_key_row.setTitle("API Key");
         api_key_row.setShowApplyButton(@intFromBool(true));
         api_key_row.setInputPurpose(gtk.InputPurpose.password);
-        priv.api_key_entry = api_key_row.as(gtk.Entry);
+        priv.api_key_row = api_key_row;
         api_group.add(api_key_row.as(gtk.Widget));
 
         const endpoint_row = adw.EntryRow.new();
         endpoint_row.setTitle("Endpoint");
         endpoint_row.setShowApplyButton(@intFromBool(true));
-        priv.endpoint_entry = endpoint_row.as(gtk.Entry);
+        priv.endpoint_row = endpoint_row;
         api_group.add(endpoint_row.as(gtk.Widget));
 
         page.add(api_group.as(gtk.Widget));
@@ -121,7 +129,7 @@ pub const AiSettingsDialog = extern struct {
         max_tokens_row.setSubtitle("Maximum tokens per response");
         max_tokens_row.setRange(1, 100000);
         max_tokens_row.setValue(2000);
-        priv.max_tokens_spin = max_tokens_row.as(gtk.SpinButton);
+        priv.max_tokens_row = max_tokens_row;
         advanced_group.add(max_tokens_row.as(gtk.Widget));
 
         const temperature_row = adw.SpinRow.new();
@@ -130,7 +138,7 @@ pub const AiSettingsDialog = extern struct {
         temperature_row.setRange(0.0, 2.0);
         temperature_row.setValue(0.7);
         temperature_row.setDigits(1);
-        priv.temperature_scale = temperature_row.as(gtk.Scale);
+        priv.temperature_row = temperature_row;
         advanced_group.add(temperature_row.as(gtk.Widget));
 
         const context_aware_row = adw.ActionRow.new();
@@ -146,7 +154,7 @@ pub const AiSettingsDialog = extern struct {
         context_lines_row.setSubtitle("Number of terminal lines to include");
         context_lines_row.setRange(0, 100);
         context_lines_row.setValue(10);
-        priv.context_lines_spin = context_lines_row.as(gtk.SpinButton);
+        priv.context_lines_row = context_lines_row;
         advanced_group.add(context_lines_row.as(gtk.Widget));
 
         page.add(advanced_group.as(gtk.Widget));

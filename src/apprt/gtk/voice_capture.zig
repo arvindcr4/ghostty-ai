@@ -94,15 +94,32 @@ pub const VoiceCaptureManager = struct {
         self.start_time = std.time.milliTimestamp();
 
         // Spawn the recording process
-        const argv = [_][]const u8{
-            capture_cmd,
-            "--file-format=wav",
-            "--channels=1",
-            "--rate=16000",
-            self.temp_file_path.?,
+        // parecord and arecord have different CLI syntax
+        const is_parecord = std.mem.indexOf(u8, capture_cmd, "parecord") != null;
+
+        var argv_buf: [8][]const u8 = undefined;
+        const argv: []const []const u8 = if (is_parecord) blk: {
+            // parecord syntax: --file-format=wav --channels=1 --rate=16000 file.wav
+            argv_buf[0] = capture_cmd;
+            argv_buf[1] = "--file-format=wav";
+            argv_buf[2] = "--channels=1";
+            argv_buf[3] = "--rate=16000";
+            argv_buf[4] = self.temp_file_path.?;
+            break :blk argv_buf[0..5];
+        } else blk: {
+            // arecord syntax: -t wav -c 1 -r 16000 -f S16_LE file.wav
+            argv_buf[0] = capture_cmd;
+            argv_buf[1] = "-t";
+            argv_buf[2] = "wav";
+            argv_buf[3] = "-c";
+            argv_buf[4] = "1";
+            argv_buf[5] = "-r";
+            argv_buf[6] = "16000";
+            argv_buf[7] = self.temp_file_path.?;
+            break :blk argv_buf[0..8];
         };
 
-        var child = ChildProcess.init(&argv, self.allocator);
+        var child = ChildProcess.init(argv, self.allocator);
         child.spawn() catch |err| {
             log.err("Failed to spawn audio capture: {}", .{err});
             try self.setError("Failed to start audio recording");
@@ -247,7 +264,11 @@ pub const VoiceCaptureManager = struct {
             return;
         };
 
-        if (term.Exited != 0) {
+        const exit_code = switch (term) {
+            .Exited => |code| code,
+            else => 1, // Treat signal/stop as failure
+        };
+        if (exit_code != 0) {
             try self.setError("Transcription API error");
             return;
         }
@@ -280,11 +301,18 @@ pub const VoiceCaptureManager = struct {
         if (pos >= json.len or json[pos] != '"') return null;
         pos += 1;
 
-        // Find closing quote
+        // Find closing quote (properly track escape state for sequences like \\")
         const text_start = pos;
+        var escaped = false;
         while (pos < json.len) : (pos += 1) {
-            if (json[pos] == '"') {
-                if (pos == text_start or json[pos - 1] != '\\') break;
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (json[pos] == '\\') {
+                escaped = true;
+            } else if (json[pos] == '"') {
+                break;
             }
         }
         if (pos >= json.len) return null;

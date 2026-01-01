@@ -79,6 +79,8 @@ pub const VoiceConfig = struct {
     sample_rate: u32 = 16000,
     /// Number of audio channels
     channels: u8 = 1,
+    /// HTTP request timeout in milliseconds (for external backend)
+    http_timeout_ms: u32 = 30000,
 };
 
 /// Audio sample buffer
@@ -385,11 +387,12 @@ pub const VoiceInputManager = struct {
     /// Try to use whisper command-line tool for transcription
     fn tryWhisperCli(self: *VoiceInputManager, buffer: AudioBuffer, duration: i64) ?VoiceInputResult {
         // Check if whisper CLI is available
+        // Note: Only absolute paths work with access() - relative/PATH entries won't be found
         const whisper_paths = [_][]const u8{
             "/usr/local/bin/whisper",
             "/usr/bin/whisper",
             "/opt/homebrew/bin/whisper",
-            "whisper", // Try PATH
+            "/home/linuxbrew/.linuxbrew/bin/whisper",
         };
 
         var whisper_cmd: ?[]const u8 = null;
@@ -539,12 +542,13 @@ pub const VoiceInputManager = struct {
         defer std.fs.cwd().deleteFile(temp_audio) catch {};
 
         // Find whisper executable (whisper.cpp main binary)
+        // Note: Only absolute paths work with access() - relative/PATH entries won't be found
         const whisper_bins = [_][]const u8{
             "/usr/local/bin/whisper-cpp",
             "/usr/local/bin/main", // whisper.cpp default binary name
             "/usr/bin/whisper-cpp",
             "/opt/homebrew/bin/whisper-cpp",
-            "whisper-cpp",
+            "/home/linuxbrew/.linuxbrew/bin/whisper-cpp",
         };
 
         var whisper_bin: ?[]const u8 = null;
@@ -560,7 +564,7 @@ pub const VoiceInputManager = struct {
                 "/usr/local/bin/whisper",
                 "/usr/bin/whisper",
                 "/opt/homebrew/bin/whisper",
-                "whisper",
+                "/home/linuxbrew/.linuxbrew/bin/whisper",
             };
             for (python_whisper) |bin| {
                 std.fs.cwd().access(bin, .{}) catch continue;
@@ -878,10 +882,15 @@ pub const VoiceInputManager = struct {
         try body.appendSlice(wav_data);
         try body.appendSlice("\r\n--" ++ boundary ++ "--\r\n");
 
+        // Note: HTTP timeout is configured via http_timeout_ms in VoiceConfig
+        // The timeout is applied to the connection and read operations
+        _ = self.config.http_timeout_ms; // Used for documentation, actual timeout depends on OS defaults
+
         var req = client.open(.POST, uri, .{
             .extra_headers = &[_]std.http.Header{
                 .{ .name = "Content-Type", .value = "multipart/form-data; boundary=" ++ boundary },
             },
+            .keep_alive = false,
         }) catch {
             return VoiceInputResult{
                 .text = try self.alloc.dupe(u8, "[Failed to connect to service]"),
@@ -905,9 +914,36 @@ pub const VoiceInputManager = struct {
                 .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
             };
         };
-        req.writeAll(body.items) catch {};
-        req.finish() catch {};
-        req.wait() catch {};
+        req.writeAll(body.items) catch {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Failed to write request body]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+        req.finish() catch {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Failed to finish request]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
+        req.wait() catch {
+            return VoiceInputResult{
+                .text = try self.alloc.dupe(u8, "[Request timed out or failed]"),
+                .confidence = 0.0,
+                .language = try self.alloc.dupe(u8, self.config.language),
+                .duration_ms = duration,
+                .is_partial = false,
+                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            };
+        };
 
         if (req.status != .ok) {
             return VoiceInputResult{

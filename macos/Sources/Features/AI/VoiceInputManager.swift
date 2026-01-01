@@ -1,10 +1,15 @@
 import Foundation
 import Speech
 import AVFoundation
+import os
 
 /// Manages voice input using Apple's Speech framework
 @MainActor
 class VoiceInputManager: ObservableObject {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.ghostty",
+        category: "voice_input"
+    )
     @Published var isListening: Bool = false
     @Published var transcribedText: String = ""
     @Published var errorMessage: String?
@@ -187,13 +192,8 @@ class VoiceInputManager: ObservableObject {
 
         // Buffer size: 1024 samples (~21ms at 48kHz) balances latency vs CPU overhead
         // Apple recommends 1024-4096 for speech recognition
-        do {
-            inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-                recognitionRequest.append(buffer)
-            }
-        } catch {
-            // installTap can fail if the audio engine is in a bad state
-            throw VoiceInputError.audioEngineFailed
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            recognitionRequest.append(buffer)
         }
 
         audioEngine.prepare()
@@ -227,10 +227,31 @@ class VoiceInputManager: ObservableObject {
                 }
 
                 if let error = error {
-                    // Don't show error if we intentionally cancelled
                     let nsError = error as NSError
-                    if nsError.code != self.speechRecognitionCancelledErrorCode {
-                        self.errorMessage = error.localizedDescription
+                    let errorCode = nsError.code
+                    let errorDomain = nsError.domain
+
+                    // AFAssistant error domain (private API, use string literal)
+                    let afAssistantErrorDomain = "com.apple.AFAssistant"
+
+                    if errorCode == self.speechRecognitionCancelledErrorCode {
+                        // User intentionally cancelled - this is fine, no error needed
+                        Self.logger.info("Voice input cancelled by user")
+                    } else if errorDomain == afAssistantErrorDomain && errorCode >= 200 && errorCode < 300 {
+                        // Speech recognition-specific errors
+                        let errorDetails = [
+                            203: "Speech recognition is disabled due to Apple Intelligence not being enabled on macOS Sequoia or later.",
+                            204: "No valid speech recognition assets found on device.",
+                            209: "Unable to contact speech recognition server (offline or server unavailable).",
+                        ]
+
+                        let detail = errorDetails[errorCode] ?? error.localizedDescription
+                        Self.logger.error("Voice input speech error: code=\(errorCode), domain=\(errorDomain), detail=\(detail)")
+                        self.errorMessage = "Speech recognition error [\(errorCode)]: \(detail)"
+                    } else {
+                        // Other errors (network, audio, etc.)
+                        Self.logger.error("Voice input error: code=\(errorCode), domain=\(errorDomain), description=\(error.localizedDescription)")
+                        self.errorMessage = "An unexpected error occurred [\(errorCode)]: \(error.localizedDescription)"
                     }
                     self.stopListening()
                 }

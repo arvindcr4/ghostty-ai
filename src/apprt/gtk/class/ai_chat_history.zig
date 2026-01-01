@@ -60,13 +60,23 @@ pub const ChatHistorySidebar = extern struct {
             }
         };
 
-        pub fn new(prompt: []const u8, response: []const u8, timestamp: i64, model: []const u8) *ChatEntry {
+        pub fn new(alloc: Allocator, prompt: []const u8, response: []const u8, timestamp: i64, model: []const u8) !*ChatEntry {
             const self = gobject.ext.newInstance(ChatEntry, .{});
-            self.prompt = prompt;
-            self.response = response;
+            // Duplicate strings to own the memory
+            self.prompt = try alloc.dupe(u8, prompt);
+            errdefer alloc.free(self.prompt);
+            self.response = try alloc.dupe(u8, response);
+            errdefer alloc.free(self.response);
             self.timestamp = timestamp;
-            self.model = model;
+            self.model = try alloc.dupe(u8, model);
+            errdefer alloc.free(self.model);
             return self;
+        }
+
+        pub fn deinit(self: *ChatEntry, alloc: Allocator) void {
+            alloc.free(self.prompt);
+            alloc.free(self.response);
+            alloc.free(self.model);
         }
     };
 
@@ -80,6 +90,14 @@ pub const ChatHistorySidebar = extern struct {
 
         pub const as = C.Class.as;
     };
+
+    pub const getGObjectType = gobject.ext.defineClass(Self, .{
+        .name = "GhosttyChatHistorySidebar",
+        .instanceInit = &init,
+        .classInit = &Class.init,
+        .parent_class = &Class.parent,
+        .private = .{ .Type = Private, .offset = &Private.offset },
+    });
 
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
@@ -113,12 +131,24 @@ pub const ChatHistorySidebar = extern struct {
         priv.clear_btn = clear;
         box.append(clear.as(gtk.Widget));
 
-        // History list
+        // History list with proper model and factory
         const scrolled = gtk.ScrolledWindow.new();
         scrolled.setVexpand(@intFromBool(true));
         scrolled.setPolicy(gtk.PolicyType.never, gtk.PolicyType.automatic);
 
-        const list_view = gtk.ListView.new(null, null);
+        // Initialize the list store
+        const history_store = gio.ListStore.new(ChatEntry.getGObjectType());
+        priv.history_store = history_store;
+
+        // Create selection model
+        const selection = gtk.NoSelection.new(history_store.as(gio.ListModel));
+
+        // Create factory for list items
+        const factory = gtk.SignalListItemFactory.new();
+        _ = factory.connectSetup(*anyopaque, &setupListItem, null, .{});
+        _ = factory.connectBind(*anyopaque, &bindListItem, null, .{});
+
+        const list_view = gtk.ListView.new(selection.as(gtk.SelectionModel), factory.as(gtk.ListItemFactory));
         priv.history_list = list_view;
         scrolled.setChild(list_view.as(gtk.Widget));
         box.append(scrolled.as(gtk.Widget));
@@ -131,8 +161,46 @@ pub const ChatHistorySidebar = extern struct {
         gobject.Object.virtual_methods.dispose.call(Class.parent, self.as(Parent));
     }
 
-    pub fn show(self: *Self, parent: *Window) void {
-        self.as(adw.Window).setTransientFor(parent.as(gtk.Window));
-        self.as(adw.Window).present();
+    fn setupListItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
+        // Create a box for each history entry
+        const box = gtk.Box.new(gtk.Orientation.vertical, 4);
+        box.setMarginStart(8);
+        box.setMarginEnd(8);
+        box.setMarginTop(4);
+        box.setMarginBottom(4);
+
+        const prompt_label = gtk.Label.new("");
+        prompt_label.setXalign(0);
+        prompt_label.setEllipsize(@intFromEnum(std.c.PANGO_ELLIPSIZE_END));
+        box.append(prompt_label.as(gtk.Widget));
+
+        const response_label = gtk.Label.new("");
+        response_label.setXalign(0);
+        response_label.setEllipsize(@intFromEnum(std.c.PANGO_ELLIPSIZE_END));
+        response_label.getStyleContext().addClass("dim-label");
+        box.append(response_label.as(gtk.Widget));
+
+        item.setChild(box.as(gtk.Widget));
+    }
+
+    fn bindListItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
+        const entry = item.getItem() orelse return;
+        const chat_entry = @as(*ChatEntry, @ptrCast(entry));
+        const box = item.getChild() orelse return;
+        const box_widget = box.as(gtk.Box);
+
+        // Get labels from box
+        if (box_widget.getFirstChild()) |first| {
+            first.as(gtk.Label).setText(chat_entry.prompt);
+            if (first.getNextSibling()) |second| {
+                second.as(gtk.Label).setText(chat_entry.response);
+            }
+        }
+    }
+
+    /// Show the sidebar (NavigationView is embedded, not presented as window)
+    pub fn show(self: *Self, _: *Window) void {
+        // NavigationView should be embedded in a parent container, not presented as window
+        self.as(gtk.Widget).setVisible(@intFromBool(true));
     }
 };

@@ -47,6 +47,14 @@ pub const ErrorExplanation = extern struct {
         pub const as = C.Class.as;
     };
 
+    pub const getGObjectType = gobject.ext.defineClass(Self, .{
+        .name = "GhosttyErrorExplanation",
+        .instanceInit = &init,
+        .classInit = &Class.init,
+        .parent_class = &Class.parent,
+        .private = .{ .Type = Private, .offset = &Private.offset },
+    });
+
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
         _ = self.refSink();
@@ -97,8 +105,29 @@ pub const ErrorExplanation = extern struct {
             };
         }
 
-        // Create toast with explanation
-        const toast = adw.Toast.new(explanation);
+        // Create toast with explanation and fix suggestions
+        var toast_msg = std.ArrayList(u8).init(alloc);
+        defer toast_msg.deinit();
+        toast_msg.appendSlice(explanation) catch {};
+
+        if (priv.fix_suggestions.items.len > 0) {
+            toast_msg.appendSlice("\n\nSuggested fixes:") catch {};
+            for (priv.fix_suggestions.items) |fix| {
+                toast_msg.appendSlice("\n• ") catch {};
+                toast_msg.appendSlice(fix) catch {};
+            }
+        }
+
+        const toast_text = toast_msg.toOwnedSliceSentinel(0) catch {
+            // If allocation fails, use original explanation
+            const toast = adw.Toast.new(explanation);
+            toast.setTimeout(10);
+            self.addToast(toast);
+            return;
+        };
+        defer alloc.free(toast_text);
+
+        const toast = adw.Toast.new(toast_text);
         toast.setTimeout(10); // 10 seconds
         self.addToast(toast);
     }

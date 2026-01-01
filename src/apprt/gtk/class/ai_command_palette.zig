@@ -63,14 +63,29 @@ pub const CommandPalette = extern struct {
             }
         };
 
-        pub fn new(id: []const u8, label: []const u8, description: []const u8, icon: []const u8, action: []const u8) *CommandItem {
+        pub fn new(alloc: Allocator, id: []const u8, label: []const u8, description: []const u8, icon: []const u8, action: []const u8) !*CommandItem {
             const self = gobject.ext.newInstance(CommandItem, .{});
-            self.id = id;
-            self.label = label;
-            self.description = description;
-            self.icon = icon;
-            self.action = action;
+            // Duplicate strings to own the memory
+            self.id = try alloc.dupe(u8, id);
+            errdefer alloc.free(self.id);
+            self.label = try alloc.dupe(u8, label);
+            errdefer alloc.free(self.label);
+            self.description = try alloc.dupe(u8, description);
+            errdefer alloc.free(self.description);
+            self.icon = try alloc.dupe(u8, icon);
+            errdefer alloc.free(self.icon);
+            self.action = try alloc.dupe(u8, action);
+            errdefer alloc.free(self.action);
+            self.keywords = &.{};
             return self;
+        }
+
+        pub fn deinit(self: *CommandItem, alloc: Allocator) void {
+            alloc.free(self.id);
+            alloc.free(self.label);
+            alloc.free(self.description);
+            alloc.free(self.icon);
+            alloc.free(self.action);
         }
     };
 
@@ -84,6 +99,14 @@ pub const CommandPalette = extern struct {
 
         pub const as = C.Class.as;
     };
+
+    pub const getGObjectType = gobject.ext.defineClass(Self, .{
+        .name = "GhosttyCommandPalette",
+        .instanceInit = &init,
+        .classInit = &Class.init,
+        .parent_class = &Class.parent,
+        .private = .{ .Type = Private, .offset = &Private.offset },
+    });
 
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
@@ -116,7 +139,19 @@ pub const CommandPalette = extern struct {
         scrolled.setMaxContentHeight(400);
         scrolled.setPolicy(gtk.PolicyType.never, gtk.PolicyType.automatic);
 
-        const list_view = gtk.ListView.new(null, null);
+        // Initialize the list store with proper model and factory
+        const command_store = gio.ListStore.new(CommandItem.getGObjectType());
+        priv.command_store = command_store;
+
+        // Create factory for list items
+        const factory = gtk.SignalListItemFactory.new();
+        _ = factory.connectSetup(*anyopaque, &setupCommandItem, null, .{});
+        _ = factory.connectBind(*anyopaque, &bindCommandItem, null, .{});
+
+        // Create selection model
+        const selection = gtk.SingleSelection.new(command_store.as(gio.ListModel));
+
+        const list_view = gtk.ListView.new(selection.as(gtk.SelectionModel), factory.as(gtk.ListItemFactory));
         priv.command_list = list_view;
         scrolled.setChild(list_view.as(gtk.Widget));
         box.append(scrolled.as(gtk.Widget));
@@ -125,6 +160,51 @@ pub const CommandPalette = extern struct {
         self.as(adw.Window).setTitle("Command Palette");
         self.as(adw.Window).setDefaultSize(600, 500);
         self.as(adw.Window).setModal(@intFromBool(true));
+    }
+
+    fn setupCommandItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
+        const box = gtk.Box.new(gtk.Orientation.horizontal, 8);
+        box.setMarginStart(8);
+        box.setMarginEnd(8);
+        box.setMarginTop(4);
+        box.setMarginBottom(4);
+
+        const icon = gtk.Image.new();
+        box.append(icon.as(gtk.Widget));
+
+        const label_box = gtk.Box.new(gtk.Orientation.vertical, 2);
+        label_box.setHexpand(@intFromBool(true));
+
+        const label = gtk.Label.new("");
+        label.setXalign(0);
+        label_box.append(label.as(gtk.Widget));
+
+        const description = gtk.Label.new("");
+        description.setXalign(0);
+        description.getStyleContext().addClass("dim-label");
+        label_box.append(description.as(gtk.Widget));
+
+        box.append(label_box.as(gtk.Widget));
+        item.setChild(box.as(gtk.Widget));
+    }
+
+    fn bindCommandItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
+        const entry = item.getItem() orelse return;
+        const cmd_item = @as(*CommandItem, @ptrCast(entry));
+        const box = item.getChild() orelse return;
+        const box_widget = box.as(gtk.Box);
+
+        if (box_widget.getFirstChild()) |icon_widget| {
+            icon_widget.as(gtk.Image).setFromIconName(cmd_item.icon);
+            if (icon_widget.getNextSibling()) |label_box| {
+                if (label_box.as(gtk.Box).getFirstChild()) |label| {
+                    label.as(gtk.Label).setText(cmd_item.label);
+                    if (label.getNextSibling()) |desc| {
+                        desc.as(gtk.Label).setText(cmd_item.description);
+                    }
+                }
+            }
+        }
     }
 
     fn dispose(self: *Self) callconv(.c) void {

@@ -57,12 +57,22 @@ pub const KeyboardShortcutsDialog = extern struct {
             }
         };
 
-        pub fn new(action: []const u8, shortcut: []const u8, description: []const u8) *ShortcutItem {
+        pub fn new(alloc: Allocator, action: []const u8, shortcut: []const u8, description: []const u8) !*ShortcutItem {
             const self = gobject.ext.newInstance(ShortcutItem, .{});
-            self.action = action;
-            self.shortcut = shortcut;
-            self.description = description;
+            // Duplicate strings to own the memory
+            self.action = try alloc.dupe(u8, action);
+            errdefer alloc.free(self.action);
+            self.shortcut = try alloc.dupe(u8, shortcut);
+            errdefer alloc.free(self.shortcut);
+            self.description = try alloc.dupe(u8, description);
+            errdefer alloc.free(self.description);
             return self;
+        }
+
+        pub fn deinit(self: *ShortcutItem, alloc: Allocator) void {
+            alloc.free(self.action);
+            alloc.free(self.shortcut);
+            alloc.free(self.description);
         }
     };
 
@@ -77,6 +87,14 @@ pub const KeyboardShortcutsDialog = extern struct {
         pub const as = C.Class.as;
     };
 
+    pub const getGObjectType = gobject.ext.defineClass(Self, .{
+        .name = "GhosttyKeyboardShortcutsDialog",
+        .instanceInit = &init,
+        .classInit = &Class.init,
+        .parent_class = &Class.parent,
+        .private = .{ .Type = Private, .offset = &Private.offset },
+    });
+
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
         _ = self.refSink();
@@ -85,6 +103,7 @@ pub const KeyboardShortcutsDialog = extern struct {
 
     fn init(self: *Self) callconv(.c) void {
         const priv = getPriv(self);
+        const alloc = Application.default().allocator();
 
         self.as(adw.PreferencesWindow).setTitle("Keyboard Shortcuts");
         self.as(adw.PreferencesWindow).setDefaultSize(600, 500);
@@ -100,10 +119,18 @@ pub const KeyboardShortcutsDialog = extern struct {
         const scrolled = gtk.ScrolledWindow.new();
         scrolled.setPolicy(gtk.PolicyType.never, gtk.PolicyType.automatic);
 
-        const shortcuts_store = gio.ListStore.new(gobject.Object);
+        const shortcuts_store = gio.ListStore.new(ShortcutItem.getGObjectType());
         priv.shortcuts_store = shortcuts_store;
 
-        const shortcuts_list = gtk.ListView.new(null, null);
+        // Create factory for list items
+        const factory = gtk.SignalListItemFactory.new();
+        _ = factory.connectSetup(*anyopaque, &setupShortcutItem, null, .{});
+        _ = factory.connectBind(*anyopaque, &bindShortcutItem, null, .{});
+
+        // Create selection model
+        const selection = gtk.NoSelection.new(shortcuts_store.as(gio.ListModel));
+
+        const shortcuts_list = gtk.ListView.new(selection.as(gtk.SelectionModel), factory.as(gtk.ListItemFactory));
         priv.shortcuts_list = shortcuts_list;
         scrolled.setChild(shortcuts_list.as(gtk.Widget));
 
@@ -124,8 +151,41 @@ pub const KeyboardShortcutsDialog = extern struct {
         };
 
         for (default_shortcuts) |shortcut| {
-            const item = ShortcutItem.new(shortcut.action, shortcut.shortcut, shortcut.description);
-            shortcuts_store.append(item);
+            const item = ShortcutItem.new(alloc, shortcut.action, shortcut.shortcut, shortcut.description) catch continue;
+            shortcuts_store.append(item.as(gobject.Object));
+        }
+    }
+
+    fn setupShortcutItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
+        const box = gtk.Box.new(gtk.Orientation.horizontal, 12);
+        box.setMarginStart(8);
+        box.setMarginEnd(8);
+        box.setMarginTop(4);
+        box.setMarginBottom(4);
+
+        const action_label = gtk.Label.new("");
+        action_label.setXalign(0);
+        action_label.setHexpand(@intFromBool(true));
+        box.append(action_label.as(gtk.Widget));
+
+        const shortcut_label = gtk.Label.new("");
+        shortcut_label.getStyleContext().addClass("dim-label");
+        box.append(shortcut_label.as(gtk.Widget));
+
+        item.setChild(box.as(gtk.Widget));
+    }
+
+    fn bindShortcutItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
+        const entry = item.getItem() orelse return;
+        const shortcut_item = @as(*ShortcutItem, @ptrCast(entry));
+        const box = item.getChild() orelse return;
+        const box_widget = box.as(gtk.Box);
+
+        if (box_widget.getFirstChild()) |first| {
+            first.as(gtk.Label).setText(shortcut_item.description);
+            if (first.getNextSibling()) |second| {
+                second.as(gtk.Label).setText(shortcut_item.shortcut);
+            }
         }
     }
 

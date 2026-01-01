@@ -312,6 +312,12 @@ pub const AiInputMode = extern struct {
         /// Current suggestions
         current_suggestions: std.array_list.Managed(PromptSuggestion),
 
+        /// Chat history sidebar
+        history_sidebar: ?*ChatHistorySidebar = null,
+
+        /// Flag to track if object has been disposed (prevents use-after-free)
+        is_disposed: bool = false,
+
         pub var offset: c_int = 0;
     };
 
@@ -490,6 +496,9 @@ pub const AiInputMode = extern struct {
         const priv = getPriv(self);
         const alloc = Application.default().allocator();
 
+        // Mark as disposed to prevent use-after-free in callbacks
+        priv.is_disposed = true;
+
         self.hideSuggestions();
 
         for (priv.current_suggestions.items) |*suggestion| suggestion.deinit(alloc);
@@ -517,6 +526,12 @@ pub const AiInputMode = extern struct {
             kr.deinit();
         }
         priv.knowledge_rules = null;
+
+        // Clean up history sidebar if created
+        if (priv.history_sidebar) |sidebar| {
+            sidebar.unref();
+            priv.history_sidebar = null;
+        }
 
         gtk.Widget.disposeTemplate(self.as(gtk.Widget), getGObjectType());
 
@@ -941,9 +956,12 @@ pub const AiInputMode = extern struct {
     /// Toggle chat history sidebar
     pub fn toggleHistorySidebar(self: *Self) void {
         const priv = getPriv(self);
+        // Check if disposed to prevent use-after-free
+        if (priv.is_disposed) return;
         if (priv.history_sidebar) |sidebar| {
-            const visible = sidebar.getVisible();
-            sidebar.setVisible(@intFromBool(!visible));
+            const widget = sidebar.as(gtk.Widget);
+            const visible = widget.getVisible();
+            widget.setVisible(!visible);
         }
     }
 
@@ -1074,10 +1092,10 @@ pub const AiInputMode = extern struct {
                 .custom => .custom,
             } else null;
 
-            if (provider_enum) |p| {
+            if (provider_enum) |provider| {
                 const ai_config = AiAssistant.Config{
                     .enabled = cfg.@"ai-enabled",
-                    .provider = p,
+                    .provider = provider,
                     .api_key = cfg.@"ai-api-key",
                     .endpoint = cfg.@"ai-endpoint",
                     .model = cfg.@"ai-model",
@@ -1091,7 +1109,20 @@ pub const AiInputMode = extern struct {
                 const alloc = Application.default().allocator();
                 if (AiAssistant.init(alloc, ai_config)) |assistant| {
                     priv.assistant = assistant;
-                } else |_| {
+                } else |err| {
+                    const ai_enabled = cfg.@"ai-enabled";
+                    const ai_provider_str = if (cfg.@"ai-provider") |prov| @tagName(prov) else "null";
+                    const ai_api_key_len = cfg.@"ai-api-key".len;
+                    const ai_model_str = cfg.@"ai-model";
+                    const ai_endpoint_str = cfg.@"ai-endpoint";
+                    log.err("AI assistant init failed: error={s}, ai_enabled={}, ai_provider={s}, ai_api_key_len={d}, ai_model={s}, ai_endpoint={s}", .{
+                        @errorName(err),
+                        ai_enabled,
+                        ai_provider_str,
+                        ai_api_key_len,
+                        ai_model_str,
+                        ai_endpoint_str,
+                    });
                     priv.assistant = null;
                 }
             } else {
@@ -1343,11 +1374,14 @@ pub const AiInputMode = extern struct {
         priv.response_view.setVisible(false);
         priv.loading_label.setVisible(true);
         
-        // Update progress bar
+        // Update progress bar with error handling
         if (priv.progress_bar) |pb| {
-            pb.setVisible(@intFromBool(true));
-            pb.setFraction(0.0);
-            pb.setText("Initializing...");
+            // Check if widget is still valid
+            if (self.as(gtk.Widget).isVisible()) {
+                pb.setVisible(@intFromBool(true));
+                pb.setFraction(0.0);
+                pb.setText("Initializing...");
+            }
         }
 
         // Update button states
@@ -1503,23 +1537,46 @@ pub const AiInputMode = extern struct {
                         if (mode) |m| {
                             const priv_cb = getPriv(m);
                             if (priv_cb.progress_bar) |pb| {
+                                // Check if widget is still valid before accessing
+                                if (!m.as(gtk.Widget).isVisible()) return;
+                                
                                 if (!chunk.done) {
                                     pb.setVisible(@intFromBool(true));
                                     // Estimate progress based on content length (rough estimate)
                                     const progress = @min(0.95, @as(f32, @floatFromInt(chunk.content.len)) / 10000.0);
                                     pb.setFraction(progress);
+                                    
+                                    // Update progress text
+                                    const progress_text = std.fmt.allocPrintZ(alloc_cb, "Processing... {d}%", .{@intFromFloat(progress * 100.0)}) catch {
+                                        pb.setText("Processing...");
+                                        return;
+                                    };
+                                    defer alloc_cb.free(progress_text);
+                                    pb.setText(progress_text);
                                 } else {
                                     pb.setFraction(1.0);
-                                    // Hide after a short delay
+                                    pb.setText("Complete");
+                                    
+                                    // Hide after a short delay with error handling
                                     const pb_ref = pb.ref();
-                                    _ = glib.timeoutAdd(500, struct {
+                                    if (glib.timeoutAdd(500, struct {
                                         fn callback(pb_ptr: *gtk.ProgressBar) callconv(.c) c_int {
-                                            pb_ptr.setVisible(false);
-                                            pb_ptr.setFraction(0.0);
+                                            // Check if widget is still valid before hiding
+                                            if (pb_ptr.as(gtk.Widget).isVisible()) {
+                                                pb_ptr.setVisible(false);
+                                                pb_ptr.setFraction(0.0);
+                                                pb_ptr.setText("");
+                                            }
                                             pb_ptr.unref();
                                             return 0; // G_SOURCE_REMOVE
                                         }
-                                    }.callback, pb_ref, .{});
+                                    }.callback, pb_ref, .{}) == 0) {
+                                        // Failed to add timeout, clean up immediately
+                                        pb.setVisible(false);
+                                        pb.setFraction(0.0);
+                                        pb.setText("");
+                                        pb.unref();
+                                    }
                                 }
                             }
                         }
@@ -1707,6 +1764,15 @@ pub const AiInputMode = extern struct {
                 buffer.deinit();
                 priv.streaming_response = null;
 
+                // Hide progress bar on completion
+                if (priv.progress_bar) |pb| {
+                    if (self.as(gtk.Widget).isVisible()) {
+                        pb.setVisible(false);
+                        pb.setFraction(0.0);
+                        pb.setText("");
+                    }
+                }
+
                 // Re-enable send button
                 if (priv.config) |cfg| {
                     self.setConfig(cfg);
@@ -1740,8 +1806,24 @@ pub const AiInputMode = extern struct {
         defer self.unref();
 
         const priv = getPriv(self);
+        
+        // Check if widget is still valid before accessing
+        if (!self.as(gtk.Widget).isVisible()) {
+            // Widget was destroyed, clean up and exit
+            if (result.response) |resp| alloc.free(resp);
+            if (result.err) |err| alloc.free(err);
+            return 0; // G_SOURCE_REMOVE
+        }
+        
         priv.loading_label.setVisible(false);
         priv.response_view.setVisible(true);
+
+        // Hide progress bar on completion/error
+        if (priv.progress_bar) |pb| {
+            pb.setVisible(false);
+            pb.setFraction(0.0);
+            pb.setText("");
+        }
 
         // Re-enable send button
         if (priv.config) |cfg| {
@@ -1755,13 +1837,24 @@ pub const AiInputMode = extern struct {
         self.notify(properties.regenerate_sensitive.name);
 
         // If the user cancelled, ignore late-arriving results.
-        if (priv.request_cancelled) return 0; // G_SOURCE_REMOVE
+        if (priv.request_cancelled) {
+            if (result.response) |resp| alloc.free(resp);
+            if (result.err) |err| alloc.free(err);
+            return 0; // G_SOURCE_REMOVE
+        }
 
         if (result.response) |resp| {
-            _ = self.addResponse(resp) catch {};
-            self.maybeAutoExecuteFromResponse(resp);
+            if (self.addResponse(resp)) {
+                self.maybeAutoExecuteFromResponse(resp);
+            } else |add_err| {
+                log.err("Failed to add response: {}", .{add_err});
+                alloc.free(resp);
+            }
         } else if (result.err) |err_msg| {
-            _ = self.addResponse(err_msg) catch {};
+            _ = self.addResponse(err_msg) catch |add_err| {
+                log.err("Failed to add error response: {}", .{add_err});
+                alloc.free(err_msg);
+            };
         }
 
         return 0; // G_SOURCE_REMOVE
@@ -2204,6 +2297,15 @@ pub const AiInputMode = extern struct {
         priv.loading_label.setVisible(false);
         priv.response_view.setVisible(true);
 
+        // Hide progress bar when stopping
+        if (priv.progress_bar) |pb| {
+            if (self.as(gtk.Widget).isVisible()) {
+                pb.setVisible(false);
+                pb.setFraction(0.0);
+                pb.setText("");
+            }
+        }
+
         // Re-enable send button (if config allows)
         if (priv.config) |cfg| {
             self.setConfig(cfg);
@@ -2226,7 +2328,16 @@ pub const AiInputMode = extern struct {
 
         // Check if we have a previous request to regenerate
         if (priv.last_prompt == null) {
-            log.info("No previous prompt to regenerate", .{});
+            log.warn("Regenerate clicked but no previous prompt available", .{});
+            // Show error to user
+            _ = self.addResponse("Error: No previous prompt to regenerate. Please send a new request first.") catch {};
+            return;
+        }
+
+        // Validate assistant is initialized
+        if (priv.assistant == null) {
+            log.err("Regenerate clicked but assistant is not initialized", .{});
+            _ = self.addResponse("Error: AI Assistant not initialized. Please check your configuration.") catch {};
             return;
         }
 
@@ -2251,14 +2362,72 @@ pub const AiInputMode = extern struct {
         priv.response_view.setVisible(false);
         priv.loading_label.setVisible(true);
 
-        // Prepare thread context with last prompt/context
-        const prompt_dupe = alloc.dupe(u8, priv.last_prompt.?) catch return;
-        const context_dupe = if (priv.last_context) |ctx|
-            if (ctx.len > 0) alloc.dupe(u8, ctx) catch null else null
-        else
-            null;
+        // Update progress bar with error handling
+        if (priv.progress_bar) |pb| {
+            if (self.as(gtk.Widget).isVisible()) {
+                pb.setVisible(@intFromBool(true));
+                pb.setFraction(0.0);
+                pb.setText("Regenerating...");
+            }
+        }
 
-        const config = priv.config orelse return;
+        // Prepare thread context with last prompt/context
+        const prompt_dupe = alloc.dupe(u8, priv.last_prompt.?) catch |err| {
+            log.err("Failed to duplicate prompt for regeneration: {}", .{err});
+            // Reset UI state
+            priv.loading_label.setVisible(false);
+            priv.response_view.setVisible(true);
+            priv.send_sensitive = true;
+            priv.regenerate_sensitive = true;
+            self.notify(properties.send_sensitive.name);
+            self.notify(properties.regenerate_sensitive.name);
+            
+            // Hide progress bar on error
+            if (priv.progress_bar) |pb| {
+                pb.setVisible(false);
+                pb.setFraction(0.0);
+                pb.setText("");
+            }
+            
+            _ = self.addResponse("Error: Failed to prepare regeneration request. Please try again.") catch {};
+            return;
+        };
+        
+        const context_dupe: ?[]const u8 = blk: {
+            if (priv.last_context) |ctx| {
+                if (ctx.len > 0) {
+                    break :blk alloc.dupe(u8, ctx) catch |err| {
+                        log.warn("Failed to duplicate context for regeneration: {}, continuing without context", .{err});
+                        break :blk null;
+                    };
+                }
+            }
+            break :blk null;
+        };
+
+        const config = priv.config orelse {
+            log.err("Regenerate clicked but config is null", .{});
+            alloc.free(prompt_dupe);
+            if (context_dupe) |c| alloc.free(c);
+            
+            // Reset UI state
+            priv.loading_label.setVisible(false);
+            priv.response_view.setVisible(true);
+            priv.send_sensitive = true;
+            priv.regenerate_sensitive = true;
+            self.notify(properties.send_sensitive.name);
+            self.notify(properties.regenerate_sensitive.name);
+            
+            // Hide progress bar on error
+            if (priv.progress_bar) |pb| {
+                pb.setVisible(false);
+                pb.setFraction(0.0);
+                pb.setText("");
+            }
+            
+            _ = self.addResponse("Error: Configuration not available. Please check your settings.") catch {};
+            return;
+        };
         _ = config.ref();
 
         const enable_streaming = config.get().@"ai-enabled";
@@ -2276,7 +2445,7 @@ pub const AiInputMode = extern struct {
         _ = self.ref();
 
         const thread = std.Thread.spawn(.{}, aiThreadMain, .{ctx}) catch |err| {
-            log.err("Failed to spawn AI request thread: {}", .{err});
+            log.err("Failed to spawn AI request thread for regeneration: {}", .{err});
             alloc.free(prompt_dupe);
             if (context_dupe) |c| alloc.free(c);
             config.unref();
@@ -2286,12 +2455,25 @@ pub const AiInputMode = extern struct {
             priv.loading_label.setVisible(false);
             priv.response_view.setVisible(true);
             priv.send_sensitive = true;
+            priv.regenerate_sensitive = true;
+            priv.stop_sensitive = false;
             self.notify(properties.send_sensitive.name);
+            self.notify(properties.regenerate_sensitive.name);
+            self.notify(properties.stop_sensitive.name);
+
+            // Hide progress bar on error
+            if (priv.progress_bar) |pb| {
+                if (self.as(gtk.Widget).isVisible()) {
+                    pb.setVisible(false);
+                    pb.setFraction(0.0);
+                    pb.setText("");
+                }
+            }
 
             // Show error to user
-            const error_msg = std.fmt.allocPrintZ(alloc, "Error: Failed to process request. System may be overloaded. Please try again.", .{}) catch {
+            const error_msg = std.fmt.allocPrintZ(alloc, "Error: Failed to regenerate request. System may be overloaded. Please try again.", .{}) catch {
                 // If allocation fails, use static string
-                _ = self.addResponse("Error: Request failed") catch |add_err| {
+                _ = self.addResponse("Error: Regeneration failed") catch |add_err| {
                     log.err("Failed to add error response: {}", .{add_err});
                 };
                 return;
