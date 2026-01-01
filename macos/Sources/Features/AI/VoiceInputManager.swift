@@ -32,6 +32,11 @@ class VoiceInputManager: ObservableObject {
     // Debounce delay for partial results (ms) - reduces excessive UI updates
     private let partialResultsDebounceMs: UInt64 = 300_000_000 // 300ms
 
+    // Helper wrapper for main-thread cleanup scheduled from `deinit`.
+    private struct UncheckedSendable<T>: @unchecked Sendable {
+        let value: T
+    }
+
     init() {
         // Use system locale with fallback to en-US
         // TODO: Make this configurable in settings for internationalization
@@ -60,28 +65,27 @@ class VoiceInputManager: ObservableObject {
 
     /// Clean up resources when deallocated
     /// Critical for preventing resource leaks with AVAudioEngine
-    /// Note: This runs on the deallocation thread, not @MainActor, so we do
-    /// synchronous cleanup of AVAudioEngine resources (which is thread-safe).
     deinit {
-        // Cancel any pending tasks and clear references
         debounceTask?.cancel()
-        debounceTask = nil
-        silenceTimer?.invalidate()
-        silenceTimer = nil
-
-        // Stop audio engine and clean up resources (thread-safe in AVFoundation)
-        // This prevents the microphone from staying active after deallocation
-        audioEngine?.stop()
-        if let engine = audioEngine {
-            let inputNode = engine.inputNode
-            inputNode.removeTap(onBus: 0)
-        }
-        audioEngine = nil
-
-        // Cancel recognition task and clear references
         recognitionTask?.cancel()
-        recognitionTask = nil
-        recognitionRequest = nil
+
+        let timer = UncheckedSendable(silenceTimer)
+        let engine = UncheckedSendable(audioEngine)
+        let request = UncheckedSendable(recognitionRequest)
+
+        let cleanup = {
+            timer.value?.invalidate()
+            request.value?.endAudio()
+
+            engine.value?.stop()
+            engine.value?.inputNode.removeTap(onBus: 0)
+        }
+
+        if Thread.isMainThread {
+            cleanup()
+        } else {
+            DispatchQueue.main.async(execute: cleanup)
+        }
     }
 
     /// Check current authorization status
@@ -142,6 +146,7 @@ class VoiceInputManager: ObservableObject {
 
         audioEngine?.stop()
         audioEngine?.inputNode.removeTap(onBus: 0)
+        audioEngine = nil
         recognitionRequest?.endAudio()
 
         recognitionTask?.cancel()
@@ -166,6 +171,13 @@ class VoiceInputManager: ObservableObject {
         // Cancel any previous task
         recognitionTask?.cancel()
         recognitionTask = nil
+
+        // Ensure any stale engine/taps are cleared before creating a new one
+        if let engine = audioEngine {
+            engine.stop()
+            engine.inputNode.removeTap(onBus: 0)
+            audioEngine = nil
+        }
 
         // Note: AVAudioSession is iOS-only. On macOS, AVAudioEngine handles
         // audio routing automatically without session configuration.
@@ -195,6 +207,7 @@ class VoiceInputManager: ObservableObject {
 
         // Buffer size: 1024 samples (~21ms at 48kHz) balances latency vs CPU overhead
         // Apple recommends 1024-4096 for speech recognition
+        inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
             recognitionRequest.append(buffer)
         }
