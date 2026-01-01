@@ -1711,8 +1711,6 @@ pub const AiInputMode = extern struct {
         // Now safe to check widget visibility since streaming state is valid
         if (!self.as(gtk.Widget).isVisible()) return 0;
 
-        const priv = getPriv(self);
-
         // Initialize streaming response buffer
         priv.streaming_response = std.array_list.Managed(u8).init(alloc);
 
@@ -1761,8 +1759,6 @@ pub const AiInputMode = extern struct {
 
         // Now safe to check widget visibility since streaming state is valid
         if (!self.as(gtk.Widget).isVisible()) return 0;
-
-        const priv = getPriv(self);
 
         // If the user cancelled, ignore intermediate chunks but still handle the final "done" chunk.
         if (priv.request_cancelled and !chunk.done) return 0; // G_SOURCE_REMOVE
