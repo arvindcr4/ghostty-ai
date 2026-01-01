@@ -97,7 +97,7 @@ pub const VoiceCaptureManager = struct {
         // parecord and arecord have different CLI syntax
         const is_parecord = std.mem.indexOf(u8, capture_cmd, "parecord") != null;
 
-        var argv_buf: [8][]const u8 = undefined;
+        var argv_buf: [10][]const u8 = undefined;
         const argv: []const []const u8 = if (is_parecord) blk: {
             // parecord syntax: --file-format=wav --channels=1 --rate=16000 file.wav
             argv_buf[0] = capture_cmd;
@@ -115,8 +115,10 @@ pub const VoiceCaptureManager = struct {
             argv_buf[4] = "1";
             argv_buf[5] = "-r";
             argv_buf[6] = "16000";
-            argv_buf[7] = self.temp_file_path.?;
-            break :blk argv_buf[0..8];
+            argv_buf[7] = "-f";
+            argv_buf[8] = "S16_LE";
+            argv_buf[9] = self.temp_file_path.?;
+            break :blk argv_buf[0..10];
         };
 
         var child = ChildProcess.init(argv, self.allocator);
@@ -324,16 +326,17 @@ pub const VoiceCaptureManager = struct {
 
 /// Detect available audio capture command
 fn detectAudioCapture() ?[]const u8 {
-    const tools = [_]struct { path: []const u8, cmd: []const u8 }{
-        .{ .path = "/usr/bin/parecord", .cmd = "parecord" },
-        .{ .path = "/bin/parecord", .cmd = "parecord" },
-        .{ .path = "/usr/bin/arecord", .cmd = "arecord" },
-        .{ .path = "/bin/arecord", .cmd = "arecord" },
+    // Return the full path to ensure the binary can be found regardless of PATH
+    const tools = [_][]const u8{
+        "/usr/bin/parecord",
+        "/bin/parecord",
+        "/usr/bin/arecord",
+        "/bin/arecord",
     };
 
-    for (tools) |tool| {
-        std.fs.cwd().access(tool.path, .{}) catch continue;
-        return tool.cmd;
+    for (tools) |path| {
+        std.fs.cwd().access(path, .{}) catch continue;
+        return path;
     }
     return null;
 }
