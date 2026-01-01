@@ -6,9 +6,43 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const http = std.http;
+const Uri = std.Uri;
 const log = std.log.scoped(.ai_client);
 
 const shell_module = @import("shell.zig");
+
+/// Check if a cancellation flag is set
+fn isCancelled(cancelled: ?*const std.atomic.Value(bool)) bool {
+    if (cancelled) |c| return c.load(.acquire);
+    return false;
+}
+
+/// SSE delimiter info
+const SseDelimiter = struct {
+    index: usize,
+    len: usize,
+};
+
+/// Find SSE event delimiter in buffer (double newline)
+fn findSseDelimiter(buf: []const u8) ?SseDelimiter {
+    if (std.mem.indexOf(u8, buf, "\n\n")) |idx| {
+        return .{ .index = idx, .len = 2 };
+    }
+    if (std.mem.indexOf(u8, buf, "\r\n\r\n")) |idx| {
+        return .{ .index = idx, .len = 4 };
+    }
+    return null;
+}
+
+/// Consume prefix from buffer (remove processed data)
+fn consumePrefix(buf: *std.ArrayListUnmanaged(u8), len: usize) void {
+    if (len >= buf.items.len) {
+        buf.items.len = 0;
+    } else {
+        std.mem.copyForwards(u8, buf.items[0..], buf.items[len..]);
+        buf.items.len -= len;
+    }
+}
 
 /// AI Provider types
 pub const Provider = enum {

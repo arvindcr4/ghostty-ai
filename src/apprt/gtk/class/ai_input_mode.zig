@@ -413,23 +413,6 @@ pub const AiInputMode = extern struct {
         // priv.suggestion_popup.?.setChild(scrolled.as(gtk.Widget));
     }
 
-    /// Called when the input buffer text changes - updates prompt suggestions
-    fn inputBufferChanged(buffer: *gtk.TextBuffer, self: *Self) callconv(.C) void {
-        _ = buffer;
-        _ = self;
-        // Prompt suggestion feature is disabled for now
-        // TODO: Implement prompt suggestions when the service is stable
-    }
-
-    /// Called when a suggestion row is activated - inserts the suggestion
-    fn suggestionRowActivated(list: *gtk.ListBox, row: *gtk.ListBoxRow, self: *Self) callconv(.C) void {
-        _ = list;
-        _ = row;
-        _ = self;
-        // Prompt suggestion feature is disabled for now
-        // TODO: Implement suggestion insertion when the service is stable
-    }
-
     fn agent_toggled(button: *gtk.ToggleButton, self: *Self) callconv(.C) void {
         const priv = getPriv(self);
         priv.agent_mode = button.getActive() != 0;
@@ -817,10 +800,11 @@ pub const AiInputMode = extern struct {
     pub fn setConfig(self: *Self, config: *Config) void {
         const priv = getPriv(self);
         priv.config = config;
+        const cfg = config.get();
 
         // Initialize assistant
-        if (config.@"ai-enabled") {
-            const provider_enum: ?AiAssistant.Provider = if (config.@"ai-provider") |p| switch (p) {
+        if (cfg.@"ai-enabled") {
+            const provider_enum: ?AiAssistant.Provider = if (cfg.@"ai-provider") |p| switch (p) {
                 .openai => .openai,
                 .anthropic => .anthropic,
                 .ollama => .ollama,
@@ -829,16 +813,16 @@ pub const AiInputMode = extern struct {
 
             if (provider_enum) |p| {
                 const ai_config = AiAssistant.Config{
-                    .enabled = config.@"ai-enabled",
+                    .enabled = cfg.@"ai-enabled",
                     .provider = p,
-                    .api_key = config.@"ai-api-key",
-                    .endpoint = config.@"ai-endpoint",
-                    .model = config.@"ai-model",
-                    .max_tokens = config.@"ai-max-tokens",
-                    .temperature = config.@"ai-temperature",
-                    .context_aware = config.@"ai-context-aware",
-                    .context_lines = config.@"ai-context-lines",
-                    .system_prompt = config.@"ai-system-prompt",
+                    .api_key = cfg.@"ai-api-key",
+                    .endpoint = cfg.@"ai-endpoint",
+                    .model = cfg.@"ai-model",
+                    .max_tokens = cfg.@"ai-max-tokens",
+                    .temperature = cfg.@"ai-temperature",
+                    .context_aware = cfg.@"ai-context-aware",
+                    .context_lines = cfg.@"ai-context-lines",
+                    .system_prompt = cfg.@"ai-system-prompt",
                 };
 
                 const alloc = Application.default().allocator();
@@ -847,14 +831,18 @@ pub const AiInputMode = extern struct {
                 } else |_| {
                     priv.assistant = null;
                 }
+            } else {
+                priv.assistant = null;
             }
+        } else {
+            priv.assistant = null;
         }
 
         // Update send button sensitivity based on AI config
-        const enabled = config.@"ai-enabled";
-        const provider = config.@"ai-provider" != null;
-        const api_key = config.@"ai-api-key".len > 0 or
-            config.@"ai-provider" == .ollama;
+        const enabled = cfg.@"ai-enabled";
+        const provider = cfg.@"ai-provider" != null;
+        const api_key = cfg.@"ai-api-key".len > 0 or
+            (cfg.@"ai-provider" != null and cfg.@"ai-provider".? == .ollama);
 
         priv.send_sensitive = enabled and provider and api_key;
         self.notify(properties.send_sensitive.name);
@@ -1044,7 +1032,7 @@ pub const AiInputMode = extern struct {
         _ = config.ref();
 
         // Enable streaming for all providers (config option can disable it)
-        const enable_streaming = config.@"ai-enabled";
+        const enable_streaming = config.get().@"ai-enabled";
 
         const ctx = AiThreadContext{
             .input_mode = self,
@@ -1390,7 +1378,7 @@ pub const AiInputMode = extern struct {
         const config = priv.config orelse return;
         _ = config.ref();
 
-        const enable_streaming = config.@"ai-enabled";
+        const enable_streaming = config.get().@"ai-enabled";
 
         const ctx = AiThreadContext{
             .input_mode = self,
@@ -1731,7 +1719,6 @@ pub const AiInputMode = extern struct {
     fn suggestionRowActivated(list: *gtk.ListBox, row: *gtk.ListBoxRow, self: *Self) callconv(.C) void {
         _ = list;
         const priv = getPriv(self);
-        const alloc = Application.default().allocator();
 
         // Get selected index
         const index = row.getIndex();

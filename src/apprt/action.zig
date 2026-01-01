@@ -118,6 +118,9 @@ pub const Action = union(Key) {
     /// Open the AI command search dialog.
     ai_command_search,
 
+    /// Toggle the blocks panel.
+    toggle_blocks,
+
     /// Show smart completions for the current command.
     ai_completions,
 
@@ -353,6 +356,7 @@ pub const Action = union(Key) {
         toggle_command_palette,
         ai_input_mode,
         ai_command_search,
+        toggle_blocks,
         ai_completions,
         toggle_visibility,
         toggle_background_opacity,

@@ -759,6 +759,15 @@ pub const Action = union(enum) {
     /// Available since: 1.5.0
     ai_command_search,
 
+    /// Toggle the blocks panel.
+    ///
+    /// The blocks panel shows a list of command blocks in the terminal,
+    /// allowing you to quickly navigate between commands and view their
+    /// output.
+    ///
+    /// Available since: 1.5.0
+    toggle_blocks,
+
     /// Toggle the quick terminal.
     ///
     /// The quick terminal, also known as the "Quake-style" or drop-down
@@ -1362,6 +1371,7 @@ pub const Action = union(enum) {
             .toggle_command_palette,
             .ai_input_mode,
             .ai_command_search,
+            .toggle_blocks,
             .toggle_background_opacity,
             .show_on_screen_keyboard,
             .reset_window_size,

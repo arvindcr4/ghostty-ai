@@ -413,6 +413,12 @@ fn actionCommands(action: Action.Key) []const Command {
             .description = "Open a new tab.",
         }},
 
+        .toggle_blocks => comptime &.{.{
+            .action = .toggle_blocks,
+            .title = "Toggle Blocks Panel",
+            .description = "Show or hide command blocks with search and filtering.",
+        }},
+
         .move_tab => comptime &.{
             .{
                 .action = .{ .move_tab = -1 },
