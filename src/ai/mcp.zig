@@ -220,9 +220,10 @@ pub const McpServer = struct {
         defer output.deinit(self.alloc);
 
         const writer = output.writer(self.alloc);
-        try writer.writeAll("{\"jsonrpc\":\"2.0\",\"method\":\"");
-        try writer.writeAll(method);
-        try writer.print("\",\"id\":{d}", .{id});
+        try writer.writeAll("{\"jsonrpc\":\"2.0\",\"method\":");
+        // Properly JSON-escape the method string to prevent injection
+        try std.json.stringify(method, .{}, writer);
+        try writer.print(",\"id\":{d}", .{id});
         if (params) |p| {
             try writer.writeAll(",\"params\":");
             // Properly serialize the params value using std.json

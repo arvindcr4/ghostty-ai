@@ -804,6 +804,7 @@ pub const NotebookManager = struct {
                     const stdout = try self.alloc.dupe(u8, exec_result.object.get("stdout").?.string);
                     errdefer self.alloc.free(stdout);
                     const stderr = try self.alloc.dupe(u8, exec_result.object.get("stderr").?.string);
+                    errdefer self.alloc.free(stderr);
 
                     cell.execution_result = .{
                         .exit_code = exit_code,
