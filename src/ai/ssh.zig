@@ -427,7 +427,7 @@ pub fn parseSshUrl(url: []const u8) !struct { user: ?[]const u8, host: []const u
 
     return .{
         .user = user,
-        .host = try std.alloc.dupeZ(u8, std.heap.page_allocator, remaining[host_start..host_end]),
+        .host = try std.heap.page_allocator.dupeZ(u8, remaining[host_start..host_end]),
         .port = port,
         .path = path,
     };

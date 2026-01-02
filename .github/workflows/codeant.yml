@@ -1,0 +1,49 @@
+# CodeAnt AI - Automated code review, security & quality scanning
+# https://docs.codeant.ai
+
+name: CodeAnt AI Scan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+jobs:
+  codeant-scan:
+    name: CodeAnt Security & Quality Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Run CodeAnt AI Scan
+        uses: CodeAnt-AI/codeant-ci-scan-action@v0.0.6
+        with:
+          access_token: ${{ secrets.CODEANT_ACCESS_TOKEN }}
+
+          # Enable all relevant scanners for a terminal emulator
+          # sast: Static Application Security Testing
+          # sca: Software Composition Analysis (dependencies)
+          # secrets: Detect leaked credentials
+          # antipatterns: Code quality issues
+          # iac: Infrastructure as Code (for nix/flatpak configs)
+          scanners: sast,sca,secrets,antipatterns,iac
+
+          # Timeout for scan (5 minutes)
+          scan_timeout: 300
+
+          # Exclude build artifacts, caches, and generated files
+          exclude_paths: |
+            zig-cache/**
+            .zig-cache/**
+            zig-out/**
+            macos/macos/GhosttyKit.xcframework/**
+            flatpak/builddir/**
+            flatpak/repo/**
+            .direnv/**
+            .vscode/**
+            test/cases/**/*.actual.png

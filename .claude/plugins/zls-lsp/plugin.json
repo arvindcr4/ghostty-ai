@@ -1,0 +1,14 @@
+{
+  "name": "zls-lsp",
+  "version": "1.0.0",
+  "description": "Zig Language Server integration for Claude Code",
+  "lspServers": {
+    "zig": {
+      "command": "/opt/homebrew/bin/zls",
+      "args": [],
+      "extensionToLanguage": {
+        ".zig": "zig"
+      }
+    }
+  }
+}

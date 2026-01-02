@@ -14,7 +14,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const StringHashMap = std.StringHashMap;
 const json = std.json;
 
@@ -50,32 +50,32 @@ pub const NotebookCell = struct {
         scrolled: bool,
         editable: bool,
         language: []const u8,
-        tags: ArrayList([]const u8),
+        tags: ArrayListUnmanaged([]const u8),
 
-        pub fn init(alloc: Allocator) CellMetadata {
+        pub fn init() CellMetadata {
             return .{
                 .collapsed = false,
                 .scrolled = false,
                 .editable = true,
                 .language = "shell",
-                .tags = ArrayList([]const u8).init(alloc),
+                .tags = .empty,
             };
         }
 
         pub fn deinit(self: *CellMetadata, alloc: Allocator) void {
             for (self.tags.items) |tag| alloc.free(tag);
-            self.tags.deinit();
+            self.tags.deinit(alloc);
         }
     };
 
-    pub fn init(alloc: Allocator, id: []const u8, cell_type: CellType, content: []const u8) NotebookCell {
+    pub fn init(id: []const u8, cell_type: CellType, content: []const u8) NotebookCell {
         return .{
             .id = id,
             .cell_type = cell_type,
             .content = content,
             .execution_result = null,
             .execution_count = 0,
-            .metadata = CellMetadata.init(alloc),
+            .metadata = CellMetadata.init(),
         };
     }
 
@@ -109,10 +109,10 @@ pub const Notebook = struct {
     title: []const u8,
     description: []const u8,
     author: ?[]const u8,
-    cells: ArrayList(NotebookCell),
+    cells: ArrayListUnmanaged(NotebookCell),
     created_at: i64,
     updated_at: i64,
-    tags: ArrayList([]const u8),
+    tags: ArrayListUnmanaged([]const u8),
     kernel_info: KernelInfo,
     alloc: Allocator,
     next_cell_id: u32,
@@ -129,10 +129,10 @@ pub const Notebook = struct {
             .title = try alloc.dupe(u8, title),
             .description = try alloc.dupe(u8, ""),
             .author = null,
-            .cells = ArrayList(NotebookCell).init(alloc),
+            .cells = .empty,
             .created_at = std.time.timestamp(),
             .updated_at = std.time.timestamp(),
-            .tags = ArrayList([]const u8).init(alloc),
+            .tags = .empty,
             .kernel_info = .{
                 .name = "ghostty",
                 .version = "1.0.0",
@@ -149,9 +149,9 @@ pub const Notebook = struct {
         self.alloc.free(self.description);
         if (self.author) |a| self.alloc.free(a);
         for (self.cells.items) |*cell| cell.deinit(self.alloc);
-        self.cells.deinit();
+        self.cells.deinit(self.alloc);
         for (self.tags.items) |tag| self.alloc.free(tag);
-        self.tags.deinit();
+        self.tags.deinit(self.alloc);
     }
 
     /// Generate a unique cell ID
@@ -164,8 +164,8 @@ pub const Notebook = struct {
     /// Add a cell to the notebook
     pub fn addCell(self: *Notebook, cell_type: NotebookCell.CellType, content: []const u8) !*NotebookCell {
         const id = try self.generateCellId();
-        const cell = NotebookCell.init(self.alloc, id, cell_type, try self.alloc.dupe(u8, content));
-        try self.cells.append(cell);
+        const cell = NotebookCell.init(id, cell_type, try self.alloc.dupe(u8, content));
+        try self.cells.append(self.alloc, cell);
         self.updated_at = std.time.timestamp();
         return &self.cells.items[self.cells.items.len - 1];
     }
@@ -178,8 +178,8 @@ pub const Notebook = struct {
         content: []const u8,
     ) !*NotebookCell {
         const id = try self.generateCellId();
-        const cell = NotebookCell.init(self.alloc, id, cell_type, try self.alloc.dupe(u8, content));
-        try self.cells.insert(index, cell);
+        const cell = NotebookCell.init(id, cell_type, try self.alloc.dupe(u8, content));
+        try self.cells.insert(self.alloc, index, cell);
         self.updated_at = std.time.timestamp();
         return &self.cells.items[index];
     }
@@ -199,7 +199,7 @@ pub const Notebook = struct {
         if (from_index == to_index) return;
 
         const cell = self.cells.orderedRemove(from_index);
-        self.cells.insert(to_index, cell) catch return;
+        self.cells.insert(self.alloc, to_index, cell) catch return;
         self.updated_at = std.time.timestamp();
     }
 
@@ -280,8 +280,8 @@ pub const Notebook = struct {
 
     /// Export to Markdown format
     pub fn exportToMarkdown(self: *const Notebook, alloc: Allocator) ![]const u8 {
-        var output = ArrayList(u8).init(alloc);
-        const writer = output.writer();
+        var output: ArrayListUnmanaged(u8) = .empty;
+        const writer = output.writer(alloc);
 
         // Title and metadata
         try writer.print("# {s}\n\n", .{self.title});
@@ -316,13 +316,13 @@ pub const Notebook = struct {
             }
         }
 
-        return output.toOwnedSlice();
+        return output.toOwnedSlice(alloc);
     }
 
     /// Export to HTML format
     pub fn exportToHtml(self: *const Notebook, alloc: Allocator) ![]const u8 {
-        var output = ArrayList(u8).init(alloc);
-        const writer = output.writer();
+        var output: ArrayListUnmanaged(u8) = .empty;
+        const writer = output.writer(alloc);
 
         // HTML header
         try writer.writeAll(
@@ -396,13 +396,13 @@ pub const Notebook = struct {
 
         try writer.writeAll("</div>\n</body>\n</html>\n");
 
-        return output.toOwnedSlice();
+        return output.toOwnedSlice(alloc);
     }
 
     /// Export to Jupyter notebook format (.ipynb)
     pub fn exportToJupyter(self: *const Notebook, alloc: Allocator) ![]const u8 {
-        var output = ArrayList(u8).init(alloc);
-        const writer = output.writer();
+        var output: ArrayListUnmanaged(u8) = .empty;
+        const writer = output.writer(alloc);
 
         try writer.writeAll("{\"nbformat\":4,\"nbformat_minor\":5,");
         try writer.writeAll("\"metadata\":{\"kernelspec\":{\"display_name\":\"Bash\",\"language\":\"bash\",\"name\":\"bash\"}},");
@@ -442,7 +442,7 @@ pub const Notebook = struct {
 
         try writer.writeAll("]}");
 
-        return output.toOwnedSlice();
+        return output.toOwnedSlice(alloc);
     }
 
     /// Get statistics about the notebook
@@ -794,12 +794,12 @@ pub const NotebookManager = struct {
 
     /// List all available templates
     pub fn listTemplates(self: *const NotebookManager) []const []const u8 {
-        var names = ArrayList([]const u8).init(self.alloc);
+        var names: ArrayListUnmanaged([]const u8) = .empty;
         var iter = self.templates.iterator();
         while (iter.next()) |entry| {
-            names.append(entry.key_ptr.*) catch continue;
+            names.append(self.alloc, entry.key_ptr.*) catch continue;
         }
-        return names.toOwnedSlice() catch &[_][]const u8{};
+        return names.toOwnedSlice(self.alloc) catch &[_][]const u8{};
     }
 
     /// Get statistics

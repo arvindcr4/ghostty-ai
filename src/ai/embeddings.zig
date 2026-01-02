@@ -11,7 +11,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const StringHashMap = std.StringHashMap;
 const json = std.json;
 
@@ -44,7 +44,7 @@ pub const Embedding = struct {
         start_line: ?u32 = null,
         end_line: ?u32 = null,
         /// Custom tags
-        tags: ArrayList([]const u8),
+        tags: ArrayListUnmanaged([]const u8) = .empty,
 
         pub const ContentType = enum {
             text,
@@ -54,9 +54,9 @@ pub const Embedding = struct {
             error_message,
         };
 
-        pub fn init(alloc: Allocator) EmbeddingMetadata {
+        pub fn init() EmbeddingMetadata {
             return .{
-                .tags = ArrayList([]const u8).init(alloc),
+                .tags = .empty,
             };
         }
 
@@ -64,7 +64,7 @@ pub const Embedding = struct {
             if (self.file_path) |p| alloc.free(p);
             if (self.language) |l| alloc.free(l);
             for (self.tags.items) |tag| alloc.free(tag);
-            self.tags.deinit();
+            self.tags.deinit(alloc);
         }
     };
 
@@ -207,7 +207,7 @@ pub const EmbeddingManager = struct {
             .id = try self.alloc.dupe(u8, id),
             .content = try self.alloc.dupe(u8, content),
             .vector = try self.alloc.dupe(f32, vector),
-            .metadata = Embedding.EmbeddingMetadata.init(self.alloc),
+            .metadata = Embedding.EmbeddingMetadata.init(),
             .created_at = std.time.timestamp(),
         };
 
@@ -273,18 +273,18 @@ pub const EmbeddingManager = struct {
         self: *const EmbeddingManager,
         query_vector: []const f32,
         top_k: usize,
-    ) !ArrayList(SearchResult) {
+    ) !ArrayListUnmanaged(SearchResult) {
         if (query_vector.len != self.dimension) return error.InvalidDimension;
 
-        var results = ArrayList(SearchResult).init(self.alloc);
-        errdefer results.deinit();
+        var results: ArrayListUnmanaged(SearchResult) = .empty;
+        errdefer results.deinit(self.alloc);
 
         // Calculate similarity for all embeddings
         var iter = self.embeddings.iterator();
         while (iter.next()) |entry| {
             const emb = entry.value_ptr.*;
             const similarity = cosineSimilarity(query_vector, emb.vector);
-            try results.append(.{
+            try results.append(self.alloc, .{
                 .embedding = emb,
                 .similarity = similarity,
                 .rank = 0,
@@ -313,7 +313,7 @@ pub const EmbeddingManager = struct {
         self: *EmbeddingManager,
         query: []const u8,
         top_k: usize,
-    ) !ArrayList(SearchResult) {
+    ) !ArrayListUnmanaged(SearchResult) {
         const query_vector = try self.embed(query);
         defer self.alloc.free(query_vector);
         return self.search(query_vector, top_k);
@@ -324,14 +324,14 @@ pub const EmbeddingManager = struct {
         self: *const EmbeddingManager,
         query_vector: []const f32,
         top_k: usize,
-    ) !ArrayList(SearchResult) {
+    ) !ArrayListUnmanaged(SearchResult) {
         if (self.index.count() == 0) {
             // Fall back to brute force if no index
             return self.search(query_vector, top_k);
         }
 
-        var results = ArrayList(SearchResult).init(self.alloc);
-        errdefer results.deinit();
+        var results: ArrayListUnmanaged(SearchResult) = .empty;
+        errdefer results.deinit(self.alloc);
 
         // Start from a random entry point
         var iter = self.index.iterator();
@@ -348,10 +348,10 @@ pub const EmbeddingManager = struct {
         var visited = StringHashMap(void).init(self.alloc);
         defer visited.deinit();
 
-        var queue = ArrayList([]const u8).init(self.alloc);
-        defer queue.deinit();
+        var queue: ArrayListUnmanaged([]const u8) = .empty;
+        defer queue.deinit(self.alloc);
 
-        try queue.append(entry_point.?);
+        try queue.append(self.alloc, entry_point.?);
         try visited.put(entry_point.?, {});
 
         while (queue.items.len > 0 and visited.count() < self.embeddings.count()) {
@@ -359,7 +359,7 @@ pub const EmbeddingManager = struct {
 
             if (self.embeddings.get(current_id)) |emb| {
                 const similarity = cosineSimilarity(query_vector, emb.vector);
-                try results.append(.{
+                try results.append(self.alloc, .{
                     .embedding = emb,
                     .similarity = similarity,
                     .rank = 0,
@@ -371,7 +371,7 @@ pub const EmbeddingManager = struct {
                 for (node.neighbors[0..node.neighbor_count]) |neighbor_opt| {
                     if (neighbor_opt) |neighbor| {
                         if (!visited.contains(neighbor)) {
-                            try queue.append(neighbor);
+                            try queue.append(self.alloc, neighbor);
                             try visited.put(neighbor, {});
                         }
                     }
@@ -395,29 +395,31 @@ pub const EmbeddingManager = struct {
         return results;
     }
 
+    const SimilarityEntry = struct { id: []const u8, sim: f32 };
+
     /// Update the index when a new embedding is added
     fn updateIndex(self: *EmbeddingManager, new_emb: *Embedding) !void {
         var node = IndexNode.init(new_emb.id);
 
         // Find nearest neighbors for the new node
-        var similarities = ArrayList(struct { id: []const u8, sim: f32 }).init(self.alloc);
-        defer similarities.deinit();
+        var similarities: ArrayListUnmanaged(SimilarityEntry) = .empty;
+        defer similarities.deinit(self.alloc);
 
         var iter = self.embeddings.iterator();
         while (iter.next()) |entry| {
             if (std.mem.eql(u8, entry.key_ptr.*, new_emb.id)) continue;
 
             const sim = cosineSimilarity(new_emb.vector, entry.value_ptr.*.vector);
-            try similarities.append(.{ .id = entry.key_ptr.*, .sim = sim });
+            try similarities.append(self.alloc, .{ .id = entry.key_ptr.*, .sim = sim });
         }
 
         // Sort by similarity
         std.sort.insertion(
-            struct { id: []const u8, sim: f32 },
+            SimilarityEntry,
             similarities.items,
             {},
             struct {
-                fn compare(_: void, a: struct { id: []const u8, sim: f32 }, b: struct { id: []const u8, sim: f32 }) bool {
+                fn compare(_: void, a: SimilarityEntry, b: SimilarityEntry) bool {
                     return a.sim > b.sim;
                 }
             }.compare,
@@ -657,8 +659,8 @@ test "EmbeddingManager basic operations" {
     try manager.addEmbedding("id2", "content2", &vector2);
     try manager.addEmbedding("id3", "content3", &vector3);
 
-    const results = try manager.search(&vector1, 2);
-    defer results.deinit();
+    var results = try manager.search(&vector1, 2);
+    defer results.deinit(alloc);
 
     try std.testing.expectEqual(@as(usize, 2), results.items.len);
     try std.testing.expectEqualStrings("id1", results.items[0].embedding.id);
