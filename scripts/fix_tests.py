@@ -63,7 +63,7 @@ def fix_test_file(filepath: Path):
 
     types = TYPE_MAPPINGS[filename]
 
-    with open(filepath, 'r') as f:
+    with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
     original = content
@@ -90,7 +90,7 @@ def fix_test_file(filepath: Path):
                      r'\1.deinit(alloc)', content)
 
     if content != original:
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
         return True
     return False

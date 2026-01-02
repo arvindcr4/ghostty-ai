@@ -78,7 +78,7 @@ def count_branches(content: str) -> dict:
 def read_existing_tests(test_file: Path) -> str:
     """Read existing test file if it exists."""
     if test_file.exists():
-        with open(test_file, "r") as f:
+        with open(test_file, "r", encoding="utf-8") as f:
             return f.read()
     return ""
 
@@ -199,7 +199,7 @@ def extract_zig_code(response: str) -> str:
 def append_tests(test_file: Path, new_tests: str):
     """Append new tests to existing test file."""
     # Add separator and new tests
-    with open(test_file, "a") as f:
+    with open(test_file, "a", encoding="utf-8") as f:
         f.write("\n\n// ============================================================================\n")
         f.write("// Additional tests for 100% coverage\n")
         f.write("// ============================================================================\n\n")
@@ -227,7 +227,7 @@ def main():
         print(f"\n[ANALYZING] {filename}")
 
         # Read source
-        with open(source_file, "r") as f:
+        with open(source_file, "r", encoding="utf-8") as f:
             content = f.read()
 
         # Get existing tests

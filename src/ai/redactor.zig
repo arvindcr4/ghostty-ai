@@ -219,10 +219,16 @@ pub const Redactor = struct {
 
     /// Add a custom redaction rule
     pub fn addRule(self: *Self, pattern: []const u8, replacement: []const u8, description: []const u8) !void {
+        const duped_pattern = try self.alloc.dupe(u8, pattern);
+        errdefer self.alloc.free(duped_pattern);
+        const duped_replacement = try self.alloc.dupe(u8, replacement);
+        errdefer self.alloc.free(duped_replacement);
+        const duped_description = try self.alloc.dupe(u8, description);
+        errdefer self.alloc.free(duped_description);
         const rule = RedactionRule{
-            .pattern = try self.alloc.dupe(u8, pattern),
-            .replacement = try self.alloc.dupe(u8, replacement),
-            .description = try self.alloc.dupe(u8, description),
+            .pattern = duped_pattern,
+            .replacement = duped_replacement,
+            .description = duped_description,
             .regex = null,
         };
         try self.rules.append(self.alloc, rule);

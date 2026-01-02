@@ -746,7 +746,8 @@ fn executeCommandTool(params: json.Value, alloc: Allocator) !json.Value {
 
     // Additional check for git: only allow safe read-only subcommands
     if (std.mem.eql(u8, base_command, "git") and command_str.len > 4) {
-        const git_args = command_str[4..]; // Skip "git "
+        // Skip "git " and trim any extra leading whitespace
+        const git_args = std.mem.trimLeft(u8, command_str[4..], " ");
         // Extract just the subcommand (first word after "git ")
         var sub_end: usize = 0;
         while (sub_end < git_args.len and git_args[sub_end] != ' ') : (sub_end += 1) {}
@@ -765,14 +766,18 @@ fn executeCommandTool(params: json.Value, alloc: Allocator) !json.Value {
         }
 
         // Block destructive flags for subcommands that support them
-        // e.g., "git branch -d", "git tag -d", "git remote remove"
+        // Check each space-separated token to avoid false positives on filenames
         if (git_allowed) {
             const dangerous_flags = [_][]const u8{ "-d", "-D", "--delete", "remove", "add", "set-url", "prune" };
-            for (dangerous_flags) |flag| {
-                if (std.mem.indexOf(u8, git_args, flag) != null) {
-                    git_allowed = false;
-                    break;
+            var token_iter = std.mem.tokenizeScalar(u8, git_args, ' ');
+            while (token_iter.next()) |token| {
+                for (dangerous_flags) |flag| {
+                    if (std.mem.eql(u8, token, flag)) {
+                        git_allowed = false;
+                        break;
+                    }
                 }
+                if (!git_allowed) break;
             }
         }
 

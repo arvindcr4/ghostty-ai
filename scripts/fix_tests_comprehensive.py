@@ -8,7 +8,7 @@ TESTS_DIR = Path(__file__).parent.parent / "src" / "ai" / "tests"
 
 def fix_test_file(filepath: Path):
     """Fix common issues in a test file."""
-    with open(filepath, 'r') as f:
+    with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
     original = content
@@ -44,14 +44,14 @@ def fix_test_file(filepath: Path):
     content = re.sub(r'\n{3,}', '\n\n', content)
 
     if content != original:
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
         return True
     return False
 
 def check_truncated(filepath: Path) -> bool:
     """Check if file appears truncated."""
-    with open(filepath, 'r') as f:
+    with open(filepath, 'r', encoding='utf-8') as f:
         content = f.read()
 
     # Count braces

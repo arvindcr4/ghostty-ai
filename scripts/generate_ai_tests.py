@@ -94,7 +94,7 @@ TARGET_FILES = [
 def read_file(filepath: Path) -> str:
     """Read file contents."""
     try:
-        with open(filepath, "r") as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             return f.read()
     except Exception as e:
         print(f"Error reading {filepath}: {e}")
@@ -266,7 +266,7 @@ const module = @import("{filename}");
     full_content = header + tests
 
     try:
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(full_content)
         print(f"  Saved tests to {output_file}")
     except Exception as e:
@@ -366,7 +366,7 @@ def main():
     # Generate and save report
     report = generate_test_report(results)
     report_path = output_dir / "REPORT.md"
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write(report)
     print(f"\nReport saved to {report_path}")
 

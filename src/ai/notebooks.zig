@@ -164,7 +164,10 @@ pub const Notebook = struct {
     /// Add a cell to the notebook
     pub fn addCell(self: *Notebook, cell_type: NotebookCell.CellType, content: []const u8) !*NotebookCell {
         const id = try self.generateCellId();
-        const cell = NotebookCell.init(id, cell_type, try self.alloc.dupe(u8, content));
+        errdefer self.alloc.free(id);
+        const duped_content = try self.alloc.dupe(u8, content);
+        errdefer self.alloc.free(duped_content);
+        const cell = NotebookCell.init(id, cell_type, duped_content);
         try self.cells.append(self.alloc, cell);
         self.updated_at = std.time.timestamp();
         return &self.cells.items[self.cells.items.len - 1];
@@ -178,7 +181,10 @@ pub const Notebook = struct {
         content: []const u8,
     ) !*NotebookCell {
         const id = try self.generateCellId();
-        const cell = NotebookCell.init(id, cell_type, try self.alloc.dupe(u8, content));
+        errdefer self.alloc.free(id);
+        const duped_content = try self.alloc.dupe(u8, content);
+        errdefer self.alloc.free(duped_content);
+        const cell = NotebookCell.init(id, cell_type, duped_content);
         try self.cells.insert(self.alloc, index, cell);
         self.updated_at = std.time.timestamp();
         return &self.cells.items[index];

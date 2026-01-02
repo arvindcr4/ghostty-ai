@@ -15,7 +15,7 @@
 /** @defgroup wasm WebAssembly Utilities
  *
  * Convenience functions for allocating various types in WebAssembly builds.
- * **These are only available the libghostty-vt wasm module.**
+ * **These are only available in the libghostty-vt wasm module.**
  *
  * Ghostty relies on pointers to various types for ABI compatibility, and
  * creating those pointers in Wasm can be tedious. These functions provide

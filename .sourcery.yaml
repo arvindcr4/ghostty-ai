@@ -1,0 +1,16 @@
+# Sourcery Configuration
+# https://docs.sourcery.ai/Code-Review/Configuration/
+
+# Ignore paths to reduce PR size and stay within character limits
+ignore:
+  - src/ai/macos/GhosttyKit.xcframework/**
+  - .zig-cache/**
+  - zig-cache/**
+  - zig-out/**
+  - vendor/**
+  - flatpak/builddir/**
+  - flatpak/repo/**
+  - test/cases/**/*.actual.png
+  - "*.png"
+  - "*.ttf"
+  - "*.metallib"

@@ -158,7 +158,7 @@ def extract_tests(response: str) -> str:
 
 def append_tests_to_file(filepath: Path, tests: str):
     """Append tests to the end of a Zig source file."""
-    with open(filepath, "a") as f:
+    with open(filepath, "a", encoding="utf-8") as f:
         f.write("\n\n")
         f.write(tests)
     print(f"  Added inline tests to {filepath.name}")
@@ -181,7 +181,7 @@ def main():
 
         print(f"\n[PROCESSING] {filename}")
 
-        with open(filepath, "r") as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             content = f.read()
 
         # Check if already has tests
