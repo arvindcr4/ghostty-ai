@@ -1,0 +1,15 @@
+# Cursor BugBot Configuration
+enabled: true
+auto_review: true
+
+# Review triggers
+triggers:
+  - pull_request
+  - push
+
+# Review settings
+settings:
+  review_on_open: true
+  review_on_update: true
+  post_comments: true
+  suggest_fixes: true
