@@ -713,21 +713,56 @@ fn gitLogTool(params: json.Value, alloc: Allocator) !json.Value {
 fn executeCommandTool(params: json.Value, alloc: Allocator) !json.Value {
     const command_str = if (params.object.get("command")) |c| c.string else return error.MissingCommand;
 
-    // Security: Only allow safe, read-only commands
-    const allowed_prefixes = [_][]const u8{
-        "ls",       "pwd",    "whoami",  "date",
-        "uname",    "echo",   "which",   "cat",
-        "head",     "tail",   "wc",      "grep",
-        "find",     "file",   "env",     "printenv",
-        "git log",  "git diff", "git status", "git branch",
-        "git show", "git remote",
+    // Security: Reject shell metacharacters that enable command injection
+    // These characters allow chaining commands, redirecting, or executing subshells
+    const dangerous_chars = ";|&`$()<>{}!\\\"'\n\r";
+    for (command_str) |c| {
+        for (dangerous_chars) |dangerous| {
+            if (c == dangerous) {
+                var result = json.ObjectMap.init(alloc);
+                try result.put("success", json.Value{ .bool = false });
+                try result.put("error", json.Value{ .string = "Command contains forbidden characters" });
+                return json.Value{ .object = result };
+            }
+        }
+    }
+
+    // Security: Only allow specific safe, read-only commands
+    // Extract the base command (first word) for exact matching
+    const allowed_commands = [_][]const u8{
+        "ls", "pwd", "whoami", "date", "uname", "echo", "which",
+        "cat", "head", "tail", "wc", "grep", "find", "file",
+        "env", "printenv", "git",
     };
 
+    // Get the first token (command name) by finding first space or end
+    var cmd_end: usize = 0;
+    while (cmd_end < command_str.len and command_str[cmd_end] != ' ') : (cmd_end += 1) {}
+    const base_command = command_str[0..cmd_end];
+
     var is_allowed = false;
-    for (allowed_prefixes) |prefix| {
-        if (std.mem.startsWith(u8, command_str, prefix)) {
+    for (allowed_commands) |allowed| {
+        if (std.mem.eql(u8, base_command, allowed)) {
             is_allowed = true;
             break;
+        }
+    }
+
+    // Additional check for git: only allow safe subcommands
+    if (std.mem.eql(u8, base_command, "git") and command_str.len > 4) {
+        const git_subcommand = command_str[4..]; // Skip "git "
+        const safe_git_subcommands = [_][]const u8{
+            "log", "diff", "status", "branch", "show", "remote", "tag", "rev-parse",
+        };
+        var git_allowed = false;
+        for (safe_git_subcommands) |sub| {
+            if (std.mem.startsWith(u8, git_subcommand, sub)) {
+                git_allowed = true;
+                break;
+            }
+        }
+        if (!git_allowed) {
+            is_allowed = false;
         }
     }
 
@@ -738,7 +773,7 @@ fn executeCommandTool(params: json.Value, alloc: Allocator) !json.Value {
         return json.Value{ .object = result };
     }
 
-    // Execute via shell
+    // Execute via shell (safe now that metacharacters are rejected)
     var child = std.process.Child.init(&[_][]const u8{ "/bin/sh", "-c", command_str }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
