@@ -1562,8 +1562,9 @@ test "Error handling in MCP operations" {
     defer manager.deinit();
 
     manager.setEnabled(false);
-    const tools = manager.getTools();
-    try std.testing.expectError(error.McpDisabled, tools);
+    // getTools returns empty list when disabled (not an error)
+    const tools = try manager.getTools();
+    try std.testing.expectEqual(@as(usize, 0), tools.items.len);
 }
 
 test "MCP protocol version compatibility" {
