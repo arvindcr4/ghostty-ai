@@ -331,30 +331,139 @@ pub const Redactor = struct {
     }
 };
 
-/// Simple regex implementation for Zig
-/// Note: This is a minimal implementation. For production, use a proper regex library.
+/// Simple pattern matcher for secret detection
+/// Uses prefix/literal matching since Zig lacks built-in regex
 const Regex = struct {
     pattern: []const u8,
+    prefix: []const u8,
+    min_length: usize,
 
-    pub fn compile(alloc: Allocator, pattern: []const u8, options: anytype) !Regex {
-        _ = alloc;
-        _ = options;
-        // For now, just store the pattern
-        // Real implementation would compile the regex
-        return .{ .pattern = pattern };
+    const prefixes = [_]struct { pattern: []const u8, prefix: []const u8, min_length: usize }{
+        // OpenAI
+        .{ .pattern = "(sk-|sk-proj-)[a-zA-Z0-9_-]{20,}", .prefix = "sk-", .min_length = 23 },
+        // Anthropic
+        .{ .pattern = "sk-ant-[a-zA-Z0-9_-]{20,}", .prefix = "sk-ant-", .min_length = 27 },
+        // GitHub tokens
+        .{ .pattern = "ghp_[a-zA-Z0-9]{36}", .prefix = "ghp_", .min_length = 40 },
+        .{ .pattern = "gho_[a-zA-Z0-9]{36}", .prefix = "gho_", .min_length = 40 },
+        .{ .pattern = "(ghu|ghs|ghr)_[a-zA-Z0-9]{36}", .prefix = "ghu_", .min_length = 40 },
+        // Slack
+        .{ .pattern = "xox[baprs]-[a-zA-Z0-9-]{10,}", .prefix = "xoxb-", .min_length = 15 },
+        // AWS
+        .{ .pattern = "AKIA[0-9A-Z]{16}", .prefix = "AKIA", .min_length = 20 },
+        // Google
+        .{ .pattern = "AIza[A-Za-z0-9_-]{35}", .prefix = "AIza", .min_length = 39 },
+        .{ .pattern = "ya29\\.[a-zA-Z0-9_-]{100,}", .prefix = "ya29.", .min_length = 105 },
+        // Stripe
+        .{ .pattern = "sk_live_[a-zA-Z0-9]{24,}", .prefix = "sk_live_", .min_length = 32 },
+        .{ .pattern = "sk_test_[a-zA-Z0-9]{24,}", .prefix = "sk_test_", .min_length = 32 },
+        // Bearer
+        .{ .pattern = "Bearer [a-zA-Z0-9_-]{20,}", .prefix = "Bearer ", .min_length = 27 },
+    };
+
+    pub fn compile(_: Allocator, pattern: []const u8, _: anytype) !Regex {
+        // Find matching prefix config
+        for (prefixes) |p| {
+            if (std.mem.eql(u8, p.pattern, pattern)) {
+                return .{ .pattern = pattern, .prefix = p.prefix, .min_length = p.min_length };
+            }
+        }
+        // Default: use first 4 chars as prefix if pattern is long enough
+        const prefix_len = @min(4, pattern.len);
+        return .{ .pattern = pattern, .prefix = pattern[0..prefix_len], .min_length = 20 };
     }
 
-    pub fn deinit(self: *Regex, alloc: Allocator) void {
-        _ = self.alloc;
-        _ = alloc;
-        // Clean up compiled regex
+    pub fn deinit(_: *Regex, _: Allocator) void {
+        // Pattern is stored in RedactionRule, no allocation to free
     }
 
     pub fn findAll(self: *const Regex, alloc: Allocator, input: []const u8) !std.ArrayList([]const u8) {
-        _ = self;
-        _ = input;
-        // Minimal implementation - return empty list
-        // Real implementation would find all matches
-        return std.ArrayList([]const u8).init(alloc);
+        var matches = std.ArrayList([]const u8).init(alloc);
+        errdefer {
+            for (matches.items) |m| alloc.free(m);
+            matches.deinit();
+        }
+
+        var pos: usize = 0;
+        while (pos < input.len) {
+            // Find next occurrence of prefix
+            if (std.mem.indexOfPos(u8, input, pos, self.prefix)) |start| {
+                // Find end of token (whitespace or non-token char)
+                var end = start + self.prefix.len;
+                while (end < input.len and isTokenChar(input[end])) {
+                    end += 1;
+                }
+
+                // Check minimum length requirement
+                const token_len = end - start;
+                if (token_len >= self.min_length) {
+                    const match = try alloc.dupe(u8, input[start..end]);
+                    try matches.append(match);
+                }
+
+                pos = end;
+            } else {
+                break;
+            }
+        }
+
+        return matches;
+    }
+
+    fn isTokenChar(c: u8) bool {
+        return (c >= 'a' and c <= 'z') or
+            (c >= 'A' and c <= 'Z') or
+            (c >= '0' and c <= '9') or
+            c == '_' or c == '-' or c == '.';
     }
 };
+
+// =============================================================================
+// Unit Tests for Redactor
+// =============================================================================
+
+const testing = std.testing;
+
+test "Redactor.redact removes OpenAI API key" {
+    var redactor = Redactor.init(testing.allocator);
+    defer redactor.deinit();
+
+    const input = "export OPENAI_API_KEY=sk-1234567890abcdefghijklmnop";
+    const result = try redactor.redact(input);
+    defer testing.allocator.free(result);
+
+    try testing.expect(std.mem.indexOf(u8, result, "[OPENAI_API_KEY]") != null);
+    try testing.expect(std.mem.indexOf(u8, result, "sk-1234567890") == null);
+}
+
+test "Redactor.redact removes GitHub token" {
+    var redactor = Redactor.init(testing.allocator);
+    defer redactor.deinit();
+
+    const input = "GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz";
+    const result = try redactor.redact(input);
+    defer testing.allocator.free(result);
+
+    try testing.expect(std.mem.indexOf(u8, result, "[GITHUB_TOKEN]") != null);
+    try testing.expect(std.mem.indexOf(u8, result, "ghp_") == null);
+}
+
+test "Redactor.redact preserves non-secret text" {
+    var redactor = Redactor.init(testing.allocator);
+    defer redactor.deinit();
+
+    const input = "Hello, this is a safe message with no secrets.";
+    const result = try redactor.redact(input);
+    defer testing.allocator.free(result);
+
+    try testing.expectEqualStrings(input, result);
+}
+
+test "Redactor.getStats returns correct counts" {
+    var redactor = Redactor.init(testing.allocator);
+    defer redactor.deinit();
+
+    const stats = redactor.getStats();
+    try testing.expect(stats.total_rules > 0);
+    try testing.expect(stats.enabled_rules > 0);
+}
