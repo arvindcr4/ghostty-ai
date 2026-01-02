@@ -40,20 +40,19 @@ info() {
     echo -e "${BLUE}ℹ${NC} $1"
 }
 
-# AI UI Component files to test
-AI_UI_FILES=(
-    "src/apprt/gtk/class/ai_visual_blocks.zig"
-    "src/apprt/gtk/class/ai_visual_blocks_enhanced.zig"
-    "src/apprt/gtk/class/ai_quick_actions.zig"
-    "src/apprt/gtk/class/ai_git_panel.zig"
-    "src/apprt/gtk/class/ai_session_manager.zig"
-    "src/apprt/gtk/class/ai_ssh_manager.zig"
-    "src/apprt/gtk/class/ai_themes_gallery.zig"
-    "src/apprt/gtk/class/ai_theme_customization.zig"
-    "src/apprt/gtk/class/ai_performance_analytics.zig"
-    "src/apprt/gtk/class/ai_notification_center.zig"
-    "src/apprt/gtk/class/ai_diff_viewer.zig"
-)
+# Dynamically discover AI UI component files via glob pattern
+# This ensures the test stays in sync with actual components
+AI_UI_FILES=()
+while IFS= read -r file; do
+    AI_UI_FILES+=("$file")
+done < <(find src/apprt/gtk/class -name "ai_*.zig" -type f 2>/dev/null | sort)
+
+if [ ${#AI_UI_FILES[@]} -eq 0 ]; then
+    echo -e "${RED}ERROR: No AI UI component files found matching src/apprt/gtk/class/ai_*.zig${NC}"
+    exit 1
+fi
+
+info "Discovered ${#AI_UI_FILES[@]} AI UI component files"
 
 # ============================================
 # Test Suite 1: File Existence
@@ -84,19 +83,31 @@ test_errdefer_pattern() {
         if [ -f "$file" ]; then
             # Check if file has Item types with new() function
             if grep -q "pub fn new(" "$file"; then
-                # Count new() functions that have errdefer self.unref()
-                NEW_FUNCS=$(grep -c "pub fn new(" "$file" 2>/dev/null || echo "0")
-                ERRDEFER_COUNT=$(grep -c "errdefer self.unref();" "$file" 2>/dev/null || echo "0")
+                # Count new() functions and errdefer patterns
+                # Use tr -d to strip newlines and ensure clean integer values
+                NEW_FUNCS=$(grep -c "pub fn new(" "$file" 2>/dev/null | tr -d '\n' || echo "0")
+                ERRDEFER_COUNT=$(grep -c "errdefer self.unref();" "$file" 2>/dev/null | tr -d '\n' || echo "0")
+                REFSINK_COUNT=$(grep -c "return self.refSink();" "$file" 2>/dev/null | tr -d '\n' || echo "0")
 
-                if [ "$ERRDEFER_COUNT" -gt 0 ]; then
+                # Sanitize to ensure only digits, defaulting to 0
+                NEW_FUNCS=${NEW_FUNCS//[^0-9]/}
+                NEW_FUNCS=${NEW_FUNCS:-0}
+                ERRDEFER_COUNT=${ERRDEFER_COUNT//[^0-9]/}
+                ERRDEFER_COUNT=${ERRDEFER_COUNT:-0}
+                REFSINK_COUNT=${REFSINK_COUNT//[^0-9]/}
+                REFSINK_COUNT=${REFSINK_COUNT:-0}
+
+                # Calculate expected: Item new() needs errdefer, Dialog new() uses refSink
+                ITEM_NEW_FUNCS=$((NEW_FUNCS - REFSINK_COUNT))
+
+                if [ "$ERRDEFER_COUNT" -ge "$ITEM_NEW_FUNCS" ] 2>/dev/null && [ "$ITEM_NEW_FUNCS" -gt 0 ] 2>/dev/null; then
+                    pass "$(basename $file): errdefer coverage ($ERRDEFER_COUNT/$ITEM_NEW_FUNCS Item new functions)"
+                elif [ "$REFSINK_COUNT" -gt 0 ] && [ "$ITEM_NEW_FUNCS" -eq 0 ]; then
+                    pass "$(basename $file): Dialog-only, uses refSink pattern"
+                elif [ "$ERRDEFER_COUNT" -gt 0 ]; then
                     pass "$(basename $file): has errdefer self.unref() ($ERRDEFER_COUNT found)"
                 else
-                    # Check if it's a Dialog new() that doesn't need errdefer
-                    if grep -q "return self.refSink();" "$file"; then
-                        pass "$(basename $file): Dialog uses refSink pattern"
-                    else
-                        warn "$(basename $file): no errdefer self.unref() found"
-                    fi
+                    warn "$(basename $file): $NEW_FUNCS new() functions but no errdefer self.unref()"
                 fi
             fi
         fi
