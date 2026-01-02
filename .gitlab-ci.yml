@@ -1,0 +1,179 @@
+# AI Code Review using Cursor
+# Adapted from https://github.com/sasa-tomic/argus-code-review-action
+
+stages:
+  - review
+
+variables:
+  NODE_VERSION: "22"
+
+ai-code-review:
+  stage: review
+  image: node:${NODE_VERSION}
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl jq
+  only:
+    - merge_requests
+  script:
+    - |
+      set -eEuo pipefail
+      
+      # Check if skip label is present
+      if echo "$CI_MERGE_REQUEST_LABELS" | grep -q "skip-ai-review"; then
+        echo "Skipping AI review: 'skip-ai-review' label present"
+        exit 0
+      fi
+      
+      # Validate API key
+      if [ -z "$CURSOR_API_KEY" ]; then
+        echo "ERROR: CURSOR_API_KEY variable not set"
+        exit 1
+      fi
+      
+      # Install dependencies
+      npm install -g tsx
+      npm install tsx@^4.19.0
+      
+      # Install Cursor CLI
+      INSTALLER=$(mktemp)
+      curl -fsSL https://cursor.com/install -o "$INSTALLER"
+      
+      if ! head -1 "$INSTALLER" | grep -q '^#!.*bash'; then
+        echo "ERROR: Downloaded file is not a bash script"
+        rm -f "$INSTALLER"
+        exit 1
+      fi
+      
+      bash "$INSTALLER"
+      rm -f "$INSTALLER"
+      
+      export PATH="$HOME/.cursor/bin:$PATH"
+      
+      # Generate MR data
+      export GITLAB_TOKEN="${GITLAB_TOKEN:-$CI_JOB_TOKEN}"
+      export GITLAB_URL="${CI_API_V4_URL:-https://gitlab.com/api/v4}"
+      
+      npx tsx scripts/prepare-mr-review.ts \
+        "$CI_MERGE_REQUEST_IID" \
+        --output pr_data.md \
+        --gitlab-url "$GITLAB_URL" \
+        --gitlab-token "$GITLAB_TOKEN" \
+        --project-id "$CI_PROJECT_ID"
+      
+      # Prepare prompt
+      if [ -n "$CUSTOM_PROMPT_FILE" ] && [ -f "$CUSTOM_PROMPT_FILE" ]; then
+        echo "Using custom prompt: $CUSTOM_PROMPT_FILE"
+        cat "$CUSTOM_PROMPT_FILE" pr_data.md > review_prompt.md
+      else
+        echo "Using default prompt"
+        cat scripts/prompts/default.md pr_data.md > review_prompt.md
+      fi
+      
+      # Run AI review
+      set +e
+      if ! cursor-agent --model "${CURSOR_MODEL:-sonnet-4.5-thinking}" \
+        -p "$(cat review_prompt.md)" > ai_review_output.md 2>&1; then
+        echo "ERROR: cursor-agent failed"
+        cat > ai_review_output.md <<'EOF'
+## ⚠️ AI Review Failed
+
+The AI review could not be completed. This may be due to:
+- Cursor API service issues
+- Network connectivity problems
+- Rate limiting
+- Invalid API key
+
+Please proceed with manual code review.
+EOF
+      fi
+      set -e
+      
+      if [ ! -s ai_review_output.md ]; then
+        echo "ERROR: No review output generated"
+        cat > ai_review_output.md <<'EOF'
+## ⚠️ AI Review Failed
+
+No review output was generated. Please proceed with manual code review.
+EOF
+      fi
+      
+      # Determine approval status
+      APPROVE_STATUS="unknown"
+      if grep -E '^\*\*Decision\*\*:' ai_review_output.md | grep -qi 'APPROVE' && \
+         ! grep -E '^\*\*Decision\*\*:' ai_review_output.md | grep -qi 'REQUEST_CHANGES'; then
+        APPROVE_STATUS="true"
+        echo "AI recommends APPROVAL"
+      elif grep -E '^\*\*Decision\*\*:' ai_review_output.md | grep -qi 'REQUEST_CHANGES'; then
+        APPROVE_STATUS="false"
+        echo "AI recommends REQUEST_CHANGES"
+      else
+        APPROVE_STATUS="unknown"
+        echo "AI decision could not be determined"
+      fi
+      
+      # Prepare review comment
+      REVIEW_LINES=$(wc -l < ai_review_output.md)
+      
+      cat > comment_body.md <<EOF
+<!-- ai-pr-review -->
+# 🤖 AI Code Review
+
+EOF
+      
+      if [ "$APPROVE_STATUS" = "true" ]; then
+        echo "**👍 APPROVED**" >> comment_body.md
+      elif [ "$APPROVE_STATUS" = "false" ]; then
+        echo "**👎 CHANGES REQUESTED**" >> comment_body.md
+      else
+        echo "**❓ REVIEW ERROR**" >> comment_body.md
+      fi
+      
+      echo "" >> comment_body.md
+      
+      if [ "$REVIEW_LINES" -gt 150 ]; then
+        echo "<details>" >> comment_body.md
+        echo "<summary>👀 View Full Review (${REVIEW_LINES} lines)</summary>" >> comment_body.md
+        echo "" >> comment_body.md
+        cat ai_review_output.md >> comment_body.md
+        echo "" >> comment_body.md
+        echo "</details>" >> comment_body.md
+      else
+        cat ai_review_output.md >> comment_body.md
+      fi
+      
+      echo "" >> comment_body.md
+      echo "---" >> comment_body.md
+      echo "*Generated for commit: $CI_MERGE_REQUEST_SOURCE_BRANCH_SHA*" >> comment_body.md
+      
+      # Post or update comment using GitLab API
+      COMMENT_BODY=$(cat comment_body.md | jq -Rs .)
+      
+      # Find existing comment
+      EXISTING_COMMENT=$(curl -s --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+        "$GITLAB_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/notes" | \
+        jq -r ".[] | select(.body | contains(\"<!-- ai-pr-review -->\")) | .id" | head -1)
+      
+      if [ -n "$EXISTING_COMMENT" ]; then
+        # Update existing comment
+        curl -s --request PUT \
+          --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+          --header "Content-Type: application/json" \
+          --data "{\"body\": $COMMENT_BODY}" \
+          "$GITLAB_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/notes/$EXISTING_COMMENT" > /dev/null
+        echo "Updated existing AI review comment"
+      else
+        # Create new comment
+        curl -s --request POST \
+          --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+          --header "Content-Type: application/json" \
+          --data "{\"body\": $COMMENT_BODY}" \
+          "$GITLAB_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/notes" > /dev/null
+        echo "Posted new AI review comment"
+      fi
+      
+      # Exit with error if changes requested
+      if [ "$APPROVE_STATUS" = "false" ]; then
+        exit 1
+      fi
+  allow_failure: true
+  when: on_success

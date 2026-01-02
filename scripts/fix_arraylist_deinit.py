@@ -104,28 +104,33 @@ def fix_test_file(filepath: Path, dry_run: bool = False):
         # Use word boundary \b to ensure exact variable name match
         # Pattern: defer <var>.deinit() -> defer <var>.deinit(alloc_name)
         defer_pattern = rf'\bdefer\s+{re.escape(var_name)}\.deinit\(\)'
+        defer_replacement = f'defer {var_name}.deinit({alloc_name})'
 
-        for match in re.finditer(defer_pattern, content):
-            if not is_inside_comment_or_string(content, match.start()):
-                old_text = match.group(0)
-                new_text = f'defer {var_name}.deinit({alloc_name})'
-                changes_made.append((old_text, new_text))
+        # Use a replacement function that skips matches inside comments/strings
+        def make_defer_replacer(pattern_content):
+            def replacer(match):
+                if is_inside_comment_or_string(pattern_content, match.start()):
+                    return match.group(0)  # Keep original if inside comment/string
+                changes_made.append((match.group(0), defer_replacement))
+                return defer_replacement
+            return replacer
 
-        content = re.sub(defer_pattern, f'defer {var_name}.deinit({alloc_name})', content)
+        content = re.sub(defer_pattern, make_defer_replacer(content), content)
 
         # Pattern: <var>.deinit(); at end of scope (with word boundary)
-        # Negative lookbehind to avoid matching "defer <var>.deinit()"
-        deinit_pattern = rf'(?<!defer\s)(?<!\s)\b{re.escape(var_name)}\.deinit\(\);'
+        deinit_pattern = rf'\b{re.escape(var_name)}\.deinit\(\);'
+        deinit_replacement = f'{var_name}.deinit({alloc_name});'
 
-        for match in re.finditer(rf'\b{re.escape(var_name)}\.deinit\(\);', content):
-            if not is_inside_comment_or_string(content, match.start()):
-                old_text = match.group(0)
-                new_text = f'{var_name}.deinit({alloc_name});'
-                if old_text != new_text:
-                    changes_made.append((old_text, new_text))
+        def make_deinit_replacer(pattern_content):
+            def replacer(match):
+                if is_inside_comment_or_string(pattern_content, match.start()):
+                    return match.group(0)  # Keep original if inside comment/string
+                if match.group(0) != deinit_replacement:
+                    changes_made.append((match.group(0), deinit_replacement))
+                return deinit_replacement
+            return replacer
 
-        content = re.sub(rf'\b{re.escape(var_name)}\.deinit\(\);',
-                        f'{var_name}.deinit({alloc_name});', content)
+        content = re.sub(deinit_pattern, make_deinit_replacer(content), content)
 
     if content != original:
         if dry_run:
