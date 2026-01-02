@@ -1,0 +1,21 @@
+name: Argus Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  argus-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Argus Code Review
+        uses: sasa-tomic/argus-code-review-action@v1.0.5
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
