@@ -1,0 +1,107 @@
+# yaml-language-server: $schema=https://cubic.dev/schema/cubic-repository-config.schema.json
+
+version: 1
+
+reviews:
+  enabled: true
+  sensitivity: medium
+  incremental_commits: true
+  architecture_diagrams: true
+  resolve_threads_when_addressed: true
+  custom_instructions: |
+    This is Ghostty, a fast terminal emulator written in Zig with macOS/Swift UI.
+
+    Key review priorities:
+    - Memory safety: Zig is a systems language - watch for memory leaks, use-after-free, buffer overflows
+    - Security: Terminal emulators handle user input and execute commands - flag any injection risks
+    - Performance: Terminal rendering must be fast - watch for unnecessary allocations in hot paths
+    - Cross-platform: Code should work on macOS, Linux, and other supported platforms
+    - AI features: The src/ai/ module integrates AI capabilities - ensure proper error handling
+
+    Coding standards:
+    - Follow existing Zig idioms and patterns in the codebase
+    - Use proper error handling with Zig's error unions
+    - Prefer stack allocation over heap when possible
+    - Document public APIs with doc comments
+
+  ignore:
+    files:
+      # Build outputs and caches
+      - zig-cache/**
+      - .zig-cache/**
+      - zig-out/**
+      - macos/macos/GhosttyKit.xcframework/**
+      # Generated files
+      - "**/*.actual.png"
+      - "**/*.wasm"
+      # Test artifacts
+      - test/ghostty
+      - flatpak/builddir/**
+      - flatpak/repo/**
+      # Editor/IDE files
+      - .vscode/**
+      - .direnv/**
+    head_branches:
+      - wip/*
+      - draft/*
+      - experiment/*
+    pr_labels:
+      - skip-review
+      - no-review
+      - draft
+
+  custom_rules:
+    - name: Memory safety check
+      description: |
+        Flag potential memory safety issues in Zig code:
+        - Unchecked pointer dereferences
+        - Missing defer for cleanup
+        - Potential use-after-free patterns
+        - Buffer overflows in slice operations
+      include:
+        - src/**/*.zig
+      exclude:
+        - src/**/*_test.zig
+
+    - name: Security review
+      description: |
+        Review for security vulnerabilities:
+        - Command injection in terminal escape sequences
+        - Unsafe handling of user input
+        - Privilege escalation risks
+        - Unsafe file operations
+      include:
+        - src/**/*.zig
+        - macos/**/*.swift
+
+    - name: Swift/macOS conventions
+      description: |
+        Ensure Swift code follows Apple conventions:
+        - Proper use of @MainActor for UI code
+        - Correct memory management with ARC
+        - SwiftUI best practices
+        - Proper error handling with Result/throws
+      include:
+        - macos/**/*.swift
+
+    - name: AI module review
+      description: |
+        Review AI integration code for:
+        - Proper error handling for API failures
+        - Rate limiting and retry logic
+        - Secure handling of API keys
+        - Input validation for AI prompts
+      include:
+        - src/ai/**
+
+pr_descriptions:
+  generate: true
+  instructions: |
+    Include in PR descriptions:
+    - Summary of changes and motivation
+    - Any breaking changes or migration notes
+    - Testing performed (manual and automated)
+    - Performance implications if applicable
+
+issues:
+  fix_with_cubic_buttons: true

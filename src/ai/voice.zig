@@ -10,7 +10,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const builtin = @import("builtin");
 
 const log = std.log.scoped(.ai_voice);
@@ -28,7 +28,7 @@ pub const VoiceInputResult = struct {
     /// Whether this is a partial/interim result
     is_partial: bool,
     /// Alternative interpretations
-    alternatives: ArrayList(Alternative),
+    alternatives: ArrayListUnmanaged(Alternative),
 
     pub const Alternative = struct {
         text: []const u8,
@@ -41,7 +41,7 @@ pub const VoiceInputResult = struct {
         for (self.alternatives.items) |alt| {
             alloc.free(alt.text);
         }
-        self.alternatives.deinit();
+        self.alternatives.deinit(alloc);
     }
 };
 
@@ -337,7 +337,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             };
 
@@ -363,7 +363,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             };
 
@@ -478,7 +478,7 @@ pub const VoiceInputManager = struct {
             .language = self.alloc.dupe(u8, self.config.language) catch return null,
             .duration_ms = duration,
             .is_partial = false,
-            .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            .alternatives = .empty,
         };
     }
 
@@ -492,7 +492,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
 
@@ -503,7 +503,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
 
@@ -522,7 +522,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
         audio_file.writeAll(wav_data) catch {
@@ -533,7 +533,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
         audio_file.close();
@@ -578,7 +578,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         }
 
@@ -598,7 +598,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
 
@@ -609,7 +609,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
 
@@ -629,7 +629,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             };
 
@@ -656,7 +656,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             };
 
@@ -667,7 +667,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             };
 
@@ -682,7 +682,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             }
         } else {
@@ -707,7 +707,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             };
 
@@ -718,7 +718,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             };
 
@@ -733,7 +733,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             }
         }
@@ -752,7 +752,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             };
             defer alt_file.close();
@@ -766,7 +766,7 @@ pub const VoiceInputManager = struct {
                     .language = try self.alloc.dupe(u8, self.config.language),
                     .duration_ms = duration,
                     .is_partial = false,
-                    .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                    .alternatives = .empty,
                 };
             }
 
@@ -780,7 +780,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
         defer output_file.close();
@@ -794,7 +794,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         }
 
@@ -810,7 +810,7 @@ pub const VoiceInputManager = struct {
             .language = try self.alloc.dupe(u8, self.config.language),
             .duration_ms = duration,
             .is_partial = false,
-            .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            .alternatives = .empty,
         };
     }
 
@@ -823,7 +823,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
 
@@ -834,7 +834,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
 
@@ -853,32 +853,32 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
 
         // Build multipart form data
         const boundary = "----GhosttyVoiceBoundary";
-        var body = ArrayList(u8).init(self.alloc);
-        defer body.deinit();
+        var body: ArrayListUnmanaged(u8) = .empty;
+        defer body.deinit(self.alloc);
 
         // Model field
-        try body.appendSlice("--" ++ boundary ++ "\r\n");
-        try body.appendSlice("Content-Disposition: form-data; name=\"model\"\r\n\r\n");
-        try body.appendSlice("whisper-1\r\n");
+        try body.appendSlice(self.alloc, "--" ++ boundary ++ "\r\n");
+        try body.appendSlice(self.alloc, "Content-Disposition: form-data; name=\"model\"\r\n\r\n");
+        try body.appendSlice(self.alloc, "whisper-1\r\n");
 
         // Language field
-        try body.appendSlice("--" ++ boundary ++ "\r\n");
-        try body.appendSlice("Content-Disposition: form-data; name=\"language\"\r\n\r\n");
-        try body.appendSlice(self.config.language);
-        try body.appendSlice("\r\n");
+        try body.appendSlice(self.alloc, "--" ++ boundary ++ "\r\n");
+        try body.appendSlice(self.alloc, "Content-Disposition: form-data; name=\"language\"\r\n\r\n");
+        try body.appendSlice(self.alloc, self.config.language);
+        try body.appendSlice(self.alloc, "\r\n");
 
         // Audio file
-        try body.appendSlice("--" ++ boundary ++ "\r\n");
-        try body.appendSlice("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n");
-        try body.appendSlice("Content-Type: audio/wav\r\n\r\n");
-        try body.appendSlice(wav_data);
-        try body.appendSlice("\r\n--" ++ boundary ++ "--\r\n");
+        try body.appendSlice(self.alloc, "--" ++ boundary ++ "\r\n");
+        try body.appendSlice(self.alloc, "Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n");
+        try body.appendSlice(self.alloc, "Content-Type: audio/wav\r\n\r\n");
+        try body.appendSlice(self.alloc, wav_data);
+        try body.appendSlice(self.alloc, "\r\n--" ++ boundary ++ "--\r\n");
 
         var req = client.open(.POST, uri, .{
             .extra_headers = &[_]std.http.Header{
@@ -892,7 +892,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
         defer req.deinit();
@@ -905,7 +905,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
         req.writeAll(body.items) catch {
@@ -915,7 +915,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
         req.finish() catch {
@@ -925,7 +925,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
         req.wait() catch {
@@ -935,7 +935,7 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
 
@@ -946,15 +946,13 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         }
 
         // Read and parse response
-        var response_body = ArrayList(u8).init(self.alloc);
-        defer response_body.deinit();
         var reader = req.reader();
-        reader.readAllArrayList(&response_body, 64 * 1024) catch |err| {
+        const response_body = reader.readAllAlloc(self.alloc, 64 * 1024) catch |err| {
             log.err("Failed to read HTTP response body: {}", .{err});
             return VoiceInputResult{
                 .text = try self.alloc.dupe(u8, "[Failed to read response from service]"),
@@ -962,19 +960,20 @@ pub const VoiceInputManager = struct {
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
+        defer self.alloc.free(response_body);
 
         // Parse JSON response for "text" field
-        const text = self.parseJsonText(response_body.items) orelse {
+        const text = self.parseJsonText(response_body) orelse {
             return VoiceInputResult{
                 .text = try self.alloc.dupe(u8, "[Failed to parse response]"),
                 .confidence = 0.0,
                 .language = try self.alloc.dupe(u8, self.config.language),
                 .duration_ms = duration,
                 .is_partial = false,
-                .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+                .alternatives = .empty,
             };
         };
 
@@ -984,7 +983,7 @@ pub const VoiceInputManager = struct {
             .language = try self.alloc.dupe(u8, self.config.language),
             .duration_ms = duration,
             .is_partial = false,
-            .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            .alternatives = .empty,
         };
     }
 
@@ -1054,7 +1053,7 @@ pub const VoiceInputManager = struct {
             .language = try self.alloc.dupe(u8, self.config.language),
             .duration_ms = duration,
             .is_partial = false,
-            .alternatives = ArrayList(VoiceInputResult.Alternative).init(self.alloc),
+            .alternatives = .empty,
         };
     }
 

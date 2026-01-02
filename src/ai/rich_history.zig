@@ -39,16 +39,25 @@ pub const RichHistoryEntry = struct {
     /// Command type/category
     command_type: CommandType,
 
+    /// Category of command for filtering and analysis
     pub const CommandType = enum {
+        /// File system operations (ls, cd, cp, mv, etc.)
         file_operation,
+        /// Git version control commands
         git_operation,
+        /// Build and compilation commands
         build_operation,
+        /// Test execution commands
         test_operation,
+        /// Network and HTTP operations
         network_operation,
+        /// System administration commands
         system_operation,
+        /// User-defined or unrecognized commands
         custom,
     };
 
+    /// Create a new history entry with default values
     pub fn init(alloc: Allocator) RichHistoryEntry {
         return .{
             .command = "", // Set by caller after init
@@ -67,6 +76,7 @@ pub const RichHistoryEntry = struct {
         };
     }
 
+    /// Free all allocated resources for this entry
     pub fn deinit(self: *RichHistoryEntry, alloc: Allocator) void {
         alloc.free(self.command);
         alloc.free(self.working_directory);

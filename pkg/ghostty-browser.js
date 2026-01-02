@@ -84,7 +84,7 @@
                 return;
             }
             
-            const gl = ctx.gl;
+            const {gl} = ctx;
             gl.clearColor(r, g, b, a);
             gl.clear(gl.COLOR_BUFFER_BIT);
         },
@@ -121,7 +121,7 @@
             if (!ctx) return;
             
             // Clean up WebGL resources
-            const gl = ctx.gl;
+            const {gl} = ctx;
             
             // Delete programs
             for (const program of ctx.programs.values()) {
@@ -364,7 +364,20 @@
     window.ghostty_js_webgl_deinit = function(ctxId) {
         Ghostty.WebGL.deinit(ctxId);
     };
-    
+
+    // UTF-8 string conversion from WASM memory
+    const UTF8ToString = (ptr) => {
+        if (!ptr) return '';
+
+        // Find string length
+        let len = 0;
+        while (Module.HEAPU8[ptr + len] !== 0) len++;
+
+        // Convert to string
+        const arr = new Uint8Array(Module.HEAPU8.buffer, ptr, len);
+        return new TextDecoder().decode(arr);
+    };
+
     // Logging CAPI functions
     window.ghostty_js_log = function(level, message) {
         const msg = message ? UTF8ToString(message) : '';
@@ -411,23 +424,6 @@
         const text = UTF8ToString(content);
         Ghostty.clipboard.write(text);
     };
-    
-    /**
-     * Utility functions
-     */
-    
-    // UTF-8 string conversion from WASM memory
-    function UTF8ToString(ptr) {
-        if (!ptr) return '';
-        
-        // Find string length
-        let len = 0;
-        while (Module.HEAPU8[ptr + len] !== 0) len++;
-        
-        // Convert to string
-        const arr = new Uint8Array(Module.HEAPU8.buffer, ptr, len);
-        return new TextDecoder().decode(arr);
-    }
     
     /**
      * Terminal Integration Helpers

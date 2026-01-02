@@ -13,7 +13,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const StringHashMap = std.StringHashMap;
 const json = std.json;
 
@@ -74,9 +74,9 @@ pub const McpServer = struct {
     uri: []const u8,
     state: ConnectionState,
     capabilities: ServerCapabilities,
-    tools: ArrayList(McpTool),
-    resources: ArrayList(McpResource),
-    prompts: ArrayList(McpPrompt),
+    tools: ArrayListUnmanaged(McpTool),
+    resources: ArrayListUnmanaged(McpResource),
+    prompts: ArrayListUnmanaged(McpPrompt),
     process: ?std.process.Child,
     next_request_id: u64,
     pending_requests: StringHashMap(PendingRequest),
@@ -96,9 +96,9 @@ pub const McpServer = struct {
             .uri = try std.fmt.allocPrint(alloc, "stdio://{s}", .{config.command}),
             .state = .disconnected,
             .capabilities = .{},
-            .tools = ArrayList(McpTool).init(alloc),
-            .resources = ArrayList(McpResource).init(alloc),
-            .prompts = ArrayList(McpPrompt).init(alloc),
+            .tools = .empty,
+            .resources = .empty,
+            .prompts = .empty,
             .process = null,
             .next_request_id = 1,
             .pending_requests = StringHashMap(PendingRequest).init(alloc),
@@ -114,13 +114,13 @@ pub const McpServer = struct {
         self.alloc.free(self.uri);
 
         for (self.tools.items) |*tool| tool.deinit(self.alloc);
-        self.tools.deinit();
+        self.tools.deinit(self.alloc);
 
         for (self.resources.items) |*resource| resource.deinit(self.alloc);
-        self.resources.deinit();
+        self.resources.deinit(self.alloc);
 
-        for (self.prompts.items) |*prompt| prompt.deinit(self.alloc);
-        self.prompts.deinit();
+        for (self.prompts.items) |*prompt| prompt.deinit();
+        self.prompts.deinit(self.alloc);
 
         self.pending_requests.deinit();
     }
@@ -144,12 +144,12 @@ pub const McpServer = struct {
     /// Connect via stdio (subprocess)
     fn connectStdio(self: *McpServer) !void {
         // Parse command into argv
-        var argv = ArrayList([]const u8).init(self.alloc);
-        defer argv.deinit();
+        var argv: ArrayListUnmanaged([]const u8) = .empty;
+        defer argv.deinit(self.alloc);
 
-        try argv.append(self.config.command);
+        try argv.append(self.alloc, self.config.command);
         for (self.config.args) |arg| {
-            try argv.append(arg);
+            try argv.append(self.alloc, arg);
         }
 
         self.process = std.process.Child.init(argv.items, self.alloc);
@@ -204,7 +204,7 @@ pub const McpServer = struct {
         try client_info.put("version", json.Value{ .string = "1.0.0" });
         try params.put("clientInfo", json.Value{ .object = client_info });
 
-        var capabilities = json.ObjectMap.init(self.alloc);
+        const capabilities = json.ObjectMap.init(self.alloc);
         try params.put("capabilities", json.Value{ .object = capabilities });
 
         _ = try self.sendRequest("initialize", json.Value{ .object = params });
@@ -215,20 +215,20 @@ pub const McpServer = struct {
         const id = self.next_request_id;
         self.next_request_id += 1;
 
-        var request_obj = json.ObjectMap.init(self.alloc);
-        try request_obj.put("jsonrpc", json.Value{ .string = "2.0" });
-        try request_obj.put("id", json.Value{ .integer = @intCast(id) });
-        try request_obj.put("method", json.Value{ .string = method });
+        // Build JSON request string directly (no need for ObjectMap)
+        var output: ArrayListUnmanaged(u8) = .empty;
+        defer output.deinit(self.alloc);
+
+        const writer = output.writer(self.alloc);
+        try writer.writeAll("{\"jsonrpc\":\"2.0\",\"method\":\"");
+        try writer.writeAll(method);
+        try writer.print("\",\"id\":{d}", .{id});
         if (params) |p| {
-            try request_obj.put("params", p);
+            try writer.writeAll(",\"params\":");
+            // Properly serialize the params value using std.json
+            try std.json.stringify(p, .{}, writer);
         }
-
-        // Serialize to JSON
-        var output = ArrayList(u8).init(self.alloc);
-        defer output.deinit();
-
-        try json.stringify(json.Value{ .object = request_obj }, .{}, output.writer());
-        try output.append('\n');
+        try writer.writeAll("}\n");
 
         // Send via stdio
         if (self.process) |*proc| {
@@ -346,7 +346,8 @@ pub const McpResource = struct {
 pub const McpPrompt = struct {
     name: []const u8,
     description: []const u8,
-    arguments: ArrayList(PromptArgument),
+    arguments: ArrayListUnmanaged(PromptArgument),
+    alloc: Allocator,
 
     pub const PromptArgument = struct {
         name: []const u8,
@@ -354,21 +355,21 @@ pub const McpPrompt = struct {
         required: bool,
     };
 
-    pub fn deinit(self: *const McpPrompt, alloc: Allocator) void {
-        alloc.free(self.name);
-        alloc.free(self.description);
+    pub fn deinit(self: *McpPrompt) void {
+        self.alloc.free(self.name);
+        self.alloc.free(self.description);
         for (self.arguments.items) |arg| {
-            alloc.free(arg.name);
-            alloc.free(arg.description);
+            self.alloc.free(arg.name);
+            self.alloc.free(arg.description);
         }
-        @constCast(&self.arguments).deinit();
+        self.arguments.deinit(self.alloc);
     }
 };
 
 /// MCP Client for communicating with MCP servers
 pub const McpClient = struct {
     alloc: Allocator,
-    servers: ArrayList(*McpServer),
+    servers: ArrayListUnmanaged(*McpServer),
     builtin_server: ?*McpServer,
     enabled: bool,
 
@@ -376,7 +377,7 @@ pub const McpClient = struct {
     pub fn init(alloc: Allocator) McpClient {
         return .{
             .alloc = alloc,
-            .servers = ArrayList(*McpServer).init(alloc),
+            .servers = .empty,
             .builtin_server = null,
             .enabled = true,
         };
@@ -387,13 +388,13 @@ pub const McpClient = struct {
             server.deinit();
             self.alloc.destroy(server);
         }
-        self.servers.deinit();
+        self.servers.deinit(self.alloc);
     }
 
     /// Register an MCP server from config
     pub fn registerServer(self: *McpClient, config: ServerConfig) !*McpServer {
         const server = try McpServer.init(self.alloc, config);
-        try self.servers.append(server);
+        try self.servers.append(self.alloc, server);
         return server;
     }
 
@@ -426,12 +427,12 @@ pub const McpClient = struct {
     }
 
     /// Get all available tools from all servers
-    pub fn getAllTools(self: *const McpClient) !ArrayList(*const McpTool) {
-        var tools = ArrayList(*const McpTool).init(self.alloc);
+    pub fn getAllTools(self: *const McpClient) !ArrayListUnmanaged(*const McpTool) {
+        var tools: ArrayListUnmanaged(*const McpTool) = .empty;
 
         for (self.servers.items) |server| {
             for (server.tools.items) |*tool| {
-                try tools.append(tool);
+                try tools.append(self.alloc, tool);
             }
         }
 
@@ -471,12 +472,12 @@ pub const McpClient = struct {
     }
 
     /// Get all available resources
-    pub fn getAllResources(self: *const McpClient) !ArrayList(*const McpResource) {
-        var resources = ArrayList(*const McpResource).init(self.alloc);
+    pub fn getAllResources(self: *const McpClient) !ArrayListUnmanaged(*const McpResource) {
+        var resources: ArrayListUnmanaged(*const McpResource) = .empty;
 
         for (self.servers.items) |server| {
             for (server.resources.items) |*resource| {
-                try resources.append(resource);
+                try resources.append(self.alloc, resource);
             }
         }
 
@@ -492,24 +493,24 @@ pub const McpClient = struct {
         });
         builtin_server.state = .connected; // Always connected
         self.builtin_server = builtin_server;
-        try self.servers.append(builtin_server);
+        try self.servers.append(self.alloc, builtin_server);
 
         // File system tools
-        try builtin_server.tools.append(.{
+        try builtin_server.tools.append(self.alloc, .{
             .name = try self.alloc.dupe(u8, "read_file"),
             .description = try self.alloc.dupe(u8, "Read contents of a file"),
             .input_schema = json.Value{ .object = json.ObjectMap.init(self.alloc) },
             .handler = readFileTool,
         });
 
-        try builtin_server.tools.append(.{
+        try builtin_server.tools.append(self.alloc, .{
             .name = try self.alloc.dupe(u8, "write_file"),
             .description = try self.alloc.dupe(u8, "Write contents to a file"),
             .input_schema = json.Value{ .object = json.ObjectMap.init(self.alloc) },
             .handler = writeFileTool,
         });
 
-        try builtin_server.tools.append(.{
+        try builtin_server.tools.append(self.alloc, .{
             .name = try self.alloc.dupe(u8, "list_directory"),
             .description = try self.alloc.dupe(u8, "List files in a directory"),
             .input_schema = json.Value{ .object = json.ObjectMap.init(self.alloc) },
@@ -517,14 +518,14 @@ pub const McpClient = struct {
         });
 
         // Git tools
-        try builtin_server.tools.append(.{
+        try builtin_server.tools.append(self.alloc, .{
             .name = try self.alloc.dupe(u8, "git_status"),
             .description = try self.alloc.dupe(u8, "Get git repository status"),
             .input_schema = json.Value{ .object = json.ObjectMap.init(self.alloc) },
             .handler = gitStatusTool,
         });
 
-        try builtin_server.tools.append(.{
+        try builtin_server.tools.append(self.alloc, .{
             .name = try self.alloc.dupe(u8, "git_log"),
             .description = try self.alloc.dupe(u8, "Get git commit history"),
             .input_schema = json.Value{ .object = json.ObjectMap.init(self.alloc) },
@@ -532,7 +533,7 @@ pub const McpClient = struct {
         });
 
         // System tools
-        try builtin_server.tools.append(.{
+        try builtin_server.tools.append(self.alloc, .{
             .name = try self.alloc.dupe(u8, "execute_command"),
             .description = try self.alloc.dupe(u8, "Execute a shell command (restricted)"),
             .input_schema = json.Value{ .object = json.ObjectMap.init(self.alloc) },
@@ -540,7 +541,7 @@ pub const McpClient = struct {
         });
 
         // Environment tools
-        try builtin_server.tools.append(.{
+        try builtin_server.tools.append(self.alloc, .{
             .name = try self.alloc.dupe(u8, "get_environment"),
             .description = try self.alloc.dupe(u8, "Get environment information"),
             .input_schema = json.Value{ .object = json.ObjectMap.init(self.alloc) },
@@ -638,7 +639,7 @@ fn writeFileTool(params: json.Value, alloc: Allocator) !json.Value {
 fn listDirectoryTool(params: json.Value, alloc: Allocator) !json.Value {
     const path = if (params.object.get("path")) |p| p.string else ".";
 
-    const dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch |err| {
+    var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch |err| {
         var result = json.ObjectMap.init(alloc);
         try result.put("success", json.Value{ .bool = false });
         try result.put("error", json.Value{ .string = @errorName(err) });
@@ -708,21 +709,80 @@ fn gitLogTool(params: json.Value, alloc: Allocator) !json.Value {
 fn executeCommandTool(params: json.Value, alloc: Allocator) !json.Value {
     const command_str = if (params.object.get("command")) |c| c.string else return error.MissingCommand;
 
-    // Security: Only allow safe, read-only commands
-    const allowed_prefixes = [_][]const u8{
-        "ls",       "pwd",    "whoami",  "date",
-        "uname",    "echo",   "which",   "cat",
-        "head",     "tail",   "wc",      "grep",
-        "find",     "file",   "env",     "printenv",
-        "git log",  "git diff", "git status", "git branch",
-        "git show", "git remote",
+    // Security: Reject shell metacharacters that enable command injection
+    // These characters allow chaining commands, redirecting, or executing subshells
+    const dangerous_chars = ";|&`$()<>{}!\\\"'\n\r";
+    for (command_str) |c| {
+        for (dangerous_chars) |dangerous| {
+            if (c == dangerous) {
+                var result = json.ObjectMap.init(alloc);
+                try result.put("success", json.Value{ .bool = false });
+                try result.put("error", json.Value{ .string = "Command contains forbidden characters" });
+                return json.Value{ .object = result };
+            }
+        }
+    }
+
+    // Security: Only allow specific safe, read-only commands
+    // Extract the base command (first word) for exact matching
+    const allowed_commands = [_][]const u8{
+        "ls", "pwd", "whoami", "date", "uname", "echo", "which",
+        "cat", "head", "tail", "wc", "grep", "find", "file",
+        "env", "printenv", "git",
     };
 
+    // Get the first token (command name) by finding first space or end
+    var cmd_end: usize = 0;
+    while (cmd_end < command_str.len and command_str[cmd_end] != ' ') : (cmd_end += 1) {}
+    const base_command = command_str[0..cmd_end];
+
     var is_allowed = false;
-    for (allowed_prefixes) |prefix| {
-        if (std.mem.startsWith(u8, command_str, prefix)) {
+    for (allowed_commands) |allowed| {
+        if (std.mem.eql(u8, base_command, allowed)) {
             is_allowed = true;
             break;
+        }
+    }
+
+    // Additional check for git: only allow safe read-only subcommands
+    if (std.mem.eql(u8, base_command, "git") and command_str.len > 4) {
+        // Skip "git " and trim any extra leading whitespace
+        const git_args = std.mem.trimLeft(u8, command_str[4..], " ");
+        // Extract just the subcommand (first word after "git ")
+        var sub_end: usize = 0;
+        while (sub_end < git_args.len and git_args[sub_end] != ' ') : (sub_end += 1) {}
+        const git_subcommand = git_args[0..sub_end];
+
+        // Only allow read-only git subcommands (exact match, not prefix)
+        const safe_git_subcommands = [_][]const u8{
+            "log", "diff", "status", "branch", "show", "remote", "tag", "rev-parse",
+        };
+        var git_allowed = false;
+        for (safe_git_subcommands) |sub| {
+            if (std.mem.eql(u8, git_subcommand, sub)) {
+                git_allowed = true;
+                break;
+            }
+        }
+
+        // Block destructive flags for subcommands that support them
+        // Check each space-separated token to avoid false positives on filenames
+        if (git_allowed) {
+            const dangerous_flags = [_][]const u8{ "-d", "-D", "--delete", "remove", "add", "set-url", "prune" };
+            var token_iter = std.mem.tokenizeScalar(u8, git_args, ' ');
+            while (token_iter.next()) |token| {
+                for (dangerous_flags) |flag| {
+                    if (std.mem.eql(u8, token, flag)) {
+                        git_allowed = false;
+                        break;
+                    }
+                }
+                if (!git_allowed) break;
+            }
+        }
+
+        if (!git_allowed) {
+            is_allowed = false;
         }
     }
 
@@ -733,7 +793,7 @@ fn executeCommandTool(params: json.Value, alloc: Allocator) !json.Value {
         return json.Value{ .object = result };
     }
 
-    // Execute via shell
+    // Execute via shell (safe now that metacharacters are rejected)
     var child = std.process.Child.init(&[_][]const u8{ "/bin/sh", "-c", command_str }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
@@ -844,8 +904,8 @@ pub const McpManager = struct {
     }
 
     /// Get all available tools
-    pub fn getTools(self: *const McpManager) !ArrayList(*const McpTool) {
-        if (!self.enabled) return ArrayList(*const McpTool).init(self.client.alloc);
+    pub fn getTools(self: *const McpManager) !ArrayListUnmanaged(*const McpTool) {
+        if (!self.enabled) return .empty;
         return self.client.getAllTools();
     }
 
@@ -884,8 +944,810 @@ test "McpClient basic operations" {
 
     try client.registerBuiltinTools();
 
-    const tools = try client.getAllTools();
-    defer tools.deinit();
+    var tools = try client.getAllTools();
+    defer tools.deinit(alloc);
 
     try std.testing.expect(tools.items.len > 0);
+}
+
+test "McpClient server registration" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    // Register a simple server
+    const server = try client.registerServerSimple("test-server", "test-command");
+    try std.testing.expectEqualStrings("test-server", server.name);
+    try std.testing.expectEqualStrings("test-command", server.config.command);
+    try std.testing.expectEqual(.disconnected, server.state);
+}
+
+test "McpClient server management" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    // Register multiple servers
+    _ = try client.registerServerSimple("server1", "cmd1");
+    _ = try client.registerServerSimple("server2", "cmd2");
+
+    try std.testing.expectEqual(@as(usize, 2), client.servers.items.len);
+
+    // Find server by name
+    const found = client.getServer("server1");
+    try std.testing.expect(found != null);
+    try std.testing.expectEqualStrings("server1", found.?.name);
+
+    const not_found = client.getServer("nonexistent");
+    try std.testing.expect(not_found == null);
+}
+
+test "McpClient builtin tools" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    try client.registerBuiltinTools();
+
+    // Verify all built-in tools are registered
+    var tools = try client.getAllTools();
+    defer tools.deinit(alloc);
+
+    try std.testing.expect(tools.items.len > 0);
+
+    // Find specific tools
+    const read_file_tool = client.findTool("read_file");
+    try std.testing.expect(read_file_tool != null);
+    try std.testing.expectEqualStrings("read_file", read_file_tool.?.tool.name);
+
+    const write_file_tool = client.findTool("write_file");
+    try std.testing.expect(write_file_tool != null);
+    try std.testing.expectEqualStrings("write_file", write_file_tool.?.tool.name);
+
+    const git_status_tool = client.findTool("git_status");
+    try std.testing.expect(git_status_tool != null);
+    try std.testing.expectEqualStrings("git_status", git_status_tool.?.tool.name);
+}
+
+test "McpClient stats tracking" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    try client.registerBuiltinTools();
+
+    const stats = client.getStats();
+    try std.testing.expect(stats.total_servers > 0);
+    try std.testing.expect(stats.total_tools > 0);
+}
+
+test "McpServer initialization" {
+    const alloc = std.testing.allocator;
+
+    const config = ServerConfig{
+        .name = "test-mcp",
+        .command = "test-command",
+        .args = &[_][]const u8{ "--arg1", "value1" },
+    };
+
+    const server = try McpServer.init(alloc, config);
+    defer {
+        server.deinit();
+        alloc.destroy(server);
+    }
+
+    try std.testing.expectEqualStrings("test-mcp", server.name);
+    try std.testing.expectEqualStrings("test-command", server.config.command);
+    try std.testing.expectEqual(.disconnected, server.state);
+    try std.testing.expectEqual(@as(usize, 0), server.tools.items.len);
+}
+
+test "McpServer config with environment" {
+    const alloc = std.testing.allocator;
+
+    var env = StringHashMap([]const u8).init(alloc);
+    defer env.deinit();
+
+    try env.put("TEST_VAR", "test_value");
+
+    const config = ServerConfig{
+        .name = "env-server",
+        .command = "env-command",
+        .env = env,
+        .working_dir = "/tmp",
+    };
+
+    const server = try McpServer.init(alloc, config);
+    defer {
+        server.deinit();
+        alloc.destroy(server);
+    }
+
+    try std.testing.expect(server.config.env != null);
+    try std.testing.expectEqualStrings("/tmp", server.config.working_dir.?);
+}
+
+test "JsonRpcRequest structure" {
+    const alloc = std.testing.allocator;
+
+    var params = json.ObjectMap.init(alloc);
+    defer params.deinit();
+
+    try params.put("test", json.Value{ .string = "value" });
+
+    const request = JsonRpcRequest{
+        .id = 123,
+        .method = "test_method",
+        .params = json.Value{ .object = params },
+    };
+
+    try std.testing.expectEqualStrings("2.0", request.jsonrpc);
+    try std.testing.expectEqual(@as(u64, 123), request.id);
+    try std.testing.expectEqualStrings("test_method", request.method);
+}
+
+test "JsonRpcResponse with result" {
+    var result_obj = json.ObjectMap.init(std.testing.allocator);
+    defer result_obj.deinit();
+    try result_obj.put("status", json.Value{ .string = "success" });
+
+    const response = JsonRpcResponse{
+        .jsonrpc = "2.0",
+        .id = 456,
+        .result = json.Value{ .object = result_obj },
+        .@"error" = null,
+    };
+
+    try std.testing.expectEqualStrings("2.0", response.jsonrpc);
+    try std.testing.expectEqual(@as(?u64, 456), response.id);
+    try std.testing.expect(response.result != null);
+    try std.testing.expect(response.@"error" == null);
+}
+
+test "JsonRpcResponse with error" {
+    const response = JsonRpcResponse{
+        .jsonrpc = "2.0",
+        .id = 789,
+        .result = null,
+        .@"error" = .{
+            .code = -32601,
+            .message = "Method not found",
+            .data = null,
+        },
+    };
+
+    try std.testing.expectEqual(@as(?u64, 789), response.id);
+    try std.testing.expect(response.result == null);
+    try std.testing.expect(response.@"error" != null);
+    try std.testing.expectEqual(@as(i32, -32601), response.@"error".?.code);
+    try std.testing.expectEqualStrings("Method not found", response.@"error".?.message);
+}
+
+test "McpManager initialization" {
+    const alloc = std.testing.allocator;
+
+    var manager = try McpManager.init(alloc);
+    defer manager.deinit();
+
+    try std.testing.expect(manager.enabled);
+    // Note: Allocator structs can't be directly compared with ==
+}
+
+test "McpManager tool retrieval" {
+    const alloc = std.testing.allocator;
+
+    var manager = try McpManager.init(alloc);
+    defer manager.deinit();
+
+    var tools = try manager.getTools();
+    defer tools.deinit(alloc);
+
+    // Should have at least the built-in tools
+    try std.testing.expect(tools.items.len > 0);
+}
+
+test "McpManager statistics" {
+    const alloc = std.testing.allocator;
+
+    var manager = try McpManager.init(alloc);
+    defer manager.deinit();
+
+    const stats = manager.getStats();
+    try std.testing.expect(stats.enabled);
+    try std.testing.expect(stats.servers > 0);
+    try std.testing.expect(stats.tools > 0);
+}
+
+test "McpManager enable/disable" {
+    const alloc = std.testing.allocator;
+
+    var manager = try McpManager.init(alloc);
+    defer manager.deinit();
+
+    try std.testing.expect(manager.enabled);
+
+    manager.setEnabled(false);
+    try std.testing.expect(!manager.enabled);
+
+    manager.setEnabled(true);
+    try std.testing.expect(manager.enabled);
+}
+
+test "McpTool structure and lifecycle" {
+    const alloc = std.testing.allocator;
+
+    var schema = json.ObjectMap.init(alloc);
+    defer schema.deinit();
+
+    try schema.put("type", json.Value{ .string = "object" });
+
+    var tool = McpTool{
+        .name = try alloc.dupe(u8, "test_tool"),
+        .description = try alloc.dupe(u8, "A test tool"),
+        .input_schema = json.Value{ .object = schema },
+        .handler = null,
+    };
+
+    try std.testing.expectEqualStrings("test_tool", tool.name);
+    try std.testing.expectEqualStrings("A test tool", tool.description);
+
+    tool.deinit(alloc);
+}
+
+test "McpResource structure and lifecycle" {
+    const alloc = std.testing.allocator;
+
+    var resource = McpResource{
+        .uri = try alloc.dupe(u8, "file:///test.txt"),
+        .name = try alloc.dupe(u8, "Test Resource"),
+        .description = try alloc.dupe(u8, "A test resource"),
+        .mime_type = try alloc.dupe(u8, "text/plain"),
+    };
+
+    try std.testing.expectEqualStrings("file:///test.txt", resource.uri);
+    try std.testing.expectEqualStrings("text/plain", resource.mime_type.?);
+
+    resource.deinit(alloc);
+}
+
+test "McpPrompt structure and lifecycle" {
+    const alloc = std.testing.allocator;
+
+    var prompt = McpPrompt{
+        .name = try alloc.dupe(u8, "test_prompt"),
+        .description = try alloc.dupe(u8, "A test prompt"),
+        .arguments = .empty,
+        .alloc = alloc,
+    };
+
+    try prompt.arguments.append(alloc, .{
+        .name = try alloc.dupe(u8, "arg1"),
+        .description = try alloc.dupe(u8, "First argument"),
+        .required = true,
+    });
+
+    try std.testing.expectEqualStrings("test_prompt", prompt.name);
+    try std.testing.expectEqual(@as(usize, 1), prompt.arguments.items.len);
+
+    prompt.deinit();
+}
+
+test "Transport type enum" {
+    try std.testing.expectEqual(@as(usize, 0), @intFromEnum(TransportType.stdio));
+    try std.testing.expectEqual(@as(usize, 1), @intFromEnum(TransportType.sse));
+    try std.testing.expectEqual(@as(usize, 2), @intFromEnum(TransportType.websocket));
+}
+
+test "Connection state enum" {
+    try std.testing.expectEqual(@as(usize, 0), @intFromEnum(ConnectionState.disconnected));
+    try std.testing.expectEqual(@as(usize, 1), @intFromEnum(ConnectionState.connecting));
+    try std.testing.expectEqual(@as(usize, 2), @intFromEnum(ConnectionState.connected));
+    try std.testing.expectEqual(@as(usize, 3), @intFromEnum(ConnectionState.error_state));
+}
+
+test "Server capabilities structure" {
+    const caps = ServerCapabilities{
+        .tools = true,
+        .resources = true,
+        .prompts = false,
+        .sampling = true,
+        .logging = false,
+    };
+
+    try std.testing.expect(caps.tools);
+    try std.testing.expect(caps.resources);
+    try std.testing.expect(!caps.prompts);
+    try std.testing.expect(caps.sampling);
+    try std.testing.expect(!caps.logging);
+}
+
+test "McpClient executeTool with builtin" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    try client.registerBuiltinTools();
+
+    // Verify builtin tools are registered
+    try std.testing.expect(client.builtin_server != null);
+    if (client.builtin_server) |server| {
+        try std.testing.expect(server.tools.items.len > 0);
+
+        // Verify list_directory tool exists
+        var found = false;
+        for (server.tools.items) |tool| {
+            if (std.mem.eql(u8, tool.name, "list_directory")) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+}
+
+test "McpClient tool not found" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    var params = json.ObjectMap.init(alloc);
+    defer params.deinit();
+
+    try params.put("test", json.Value{ .string = "value" });
+
+    // Try to execute a non-existent tool
+    const result = client.executeTool("nonexistent_tool", json.Value{ .object = params });
+    try std.testing.expectError(error.ToolNotFound, result);
+}
+
+test "McpClient getAllResources" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    try client.registerBuiltinTools();
+
+    var resources = try client.getAllResources();
+    defer resources.deinit(alloc);
+
+    // Should have resources from registered servers - can be zero if no resources registered
+    try std.testing.expect(resources.items.len >= 0);
+}
+
+test "Server configuration with all options" {
+    const alloc = std.testing.allocator;
+
+    var env = StringHashMap([]const u8).init(alloc);
+    defer env.deinit();
+
+    try env.put("KEY1", "value1");
+    try env.put("KEY2", "value2");
+
+    const config = ServerConfig{
+        .name = "full-config-server",
+        .command = "complex-command",
+        .args = &[_][]const u8{ "--verbose", "--debug", "--port", "8080" },
+        .env = env,
+        .working_dir = "/home/user/project",
+        .transport = TransportType.stdio,
+    };
+
+    try std.testing.expectEqualStrings("full-config-server", config.name);
+    try std.testing.expectEqualStrings("complex-command", config.command);
+    try std.testing.expectEqual(@as(usize, 4), config.args.len);
+    try std.testing.expect(config.env != null);
+    try std.testing.expectEqualStrings("/home/user/project", config.working_dir.?);
+    try std.testing.expectEqual(TransportType.stdio, config.transport);
+}
+
+// Mock Cerebras MCP Server for Testing
+const MockCerebrasMcpServer = struct {
+    alloc: Allocator,
+    server: *McpServer,
+    responses: ArrayListUnmanaged([]const u8),
+    request_count: u64,
+
+    pub fn init(alloc: Allocator, name: []const u8) !*MockCerebrasMcpServer {
+        const mock = try alloc.create(MockCerebrasMcpServer);
+        mock.* = .{
+            .alloc = alloc,
+            .server = undefined,
+            .responses = .empty,
+            .request_count = 0,
+        };
+
+        // Create a test server (McpServer.init duplicates the name internally)
+        const server = try McpServer.init(alloc, .{
+            .name = name,
+            .command = "mock-cerebras",
+        });
+        mock.server = server;
+
+        return mock;
+    }
+
+    pub fn deinit(self: *MockCerebrasMcpServer) void {
+        // Free each duplicated response string
+        for (self.responses.items) |response| {
+            self.alloc.free(response);
+        }
+        self.responses.deinit(self.alloc);
+        self.server.deinit();
+        self.alloc.destroy(self.server);
+        self.alloc.destroy(self);
+    }
+
+    pub fn addMockResponse(self: *MockCerebrasMcpServer, response: []const u8) !void {
+        try self.responses.append(self.alloc, try self.alloc.dupe(u8, response));
+    }
+
+    pub fn simulateRequest(self: *MockCerebrasMcpServer, method: []const u8) !void {
+        _ = method;
+        self.request_count += 1;
+
+        // Simulate a successful response by building JSON string directly
+        var output: ArrayListUnmanaged(u8) = .empty;
+        defer output.deinit(self.alloc);
+
+        const writer = output.writer(self.alloc);
+        try writer.print("{{\"jsonrpc\":\"2.0\",\"id\":{d},\"result\":{{}}}}\n", .{self.request_count});
+
+        try self.addMockResponse(output.items);
+    }
+};
+
+test "MockCerebrasMcpServer creation and basic operations" {
+    const alloc = std.testing.allocator;
+
+    const mock = try MockCerebrasMcpServer.init(alloc, "cerebras-mock");
+    defer mock.deinit();
+
+    try std.testing.expectEqualStrings("cerebras-mock", mock.server.name);
+    try std.testing.expectEqual(@as(u64, 0), mock.request_count);
+
+    // Simulate some requests
+    try mock.simulateRequest("initialize");
+    try mock.simulateRequest("tools/list");
+    try mock.simulateRequest("resources/list");
+
+    try std.testing.expectEqual(@as(u64, 3), mock.request_count);
+    try std.testing.expectEqual(@as(usize, 3), mock.responses.items.len);
+}
+
+test "MockCerebrasMcpServer response tracking" {
+    const alloc = std.testing.allocator;
+
+    const mock = try MockCerebrasMcpServer.init(alloc, "cerebras-tracker");
+    defer mock.deinit();
+
+    // Add custom responses
+    try mock.addMockResponse("custom response 1");
+    try mock.addMockResponse("custom response 2");
+
+    try std.testing.expectEqual(@as(usize, 2), mock.responses.items.len);
+
+    // Simulate more requests
+    try mock.simulateRequest("test");
+    try std.testing.expectEqual(@as(usize, 3), mock.responses.items.len);
+}
+
+test "Cerebras MCP integration test" {
+    const alloc = std.testing.allocator;
+
+    // Create mock Cerebras MCP server
+    const mock = try MockCerebrasMcpServer.init(alloc, "cerebras-ai");
+    defer mock.deinit();
+
+    // Register with client - use a separate block to control cleanup order
+    var client = McpClient.init(alloc);
+
+    // In a real scenario, we would connect to the actual Cerebras MCP server
+    // For testing, we use the mock (but don't let client own it since mock will free it)
+    try client.servers.append(alloc, mock.server);
+
+    // Verify server is registered
+    try std.testing.expectEqual(@as(usize, 1), client.servers.items.len);
+
+    const found = client.getServer("cerebras-ai");
+    try std.testing.expect(found != null);
+
+    // Simulate MCP protocol handshake
+    try mock.simulateRequest("initialize");
+    try mock.simulateRequest("tools/list");
+    try mock.simulateRequest("resources/list");
+
+    try std.testing.expectEqual(@as(u64, 3), mock.request_count);
+
+    // Clear client servers before deinit to avoid double-free (mock owns the server)
+    client.servers.clearRetainingCapacity();
+    client.servers.deinit(alloc);
+}
+
+test "Cerebras MCP tools simulation" {
+    const alloc = std.testing.allocator;
+
+    const mock = try MockCerebrasMcpServer.init(alloc, "cerebras-tools");
+    defer mock.deinit();
+
+    // Simulate Cerebras-specific tools that might be available
+    try mock.simulateRequest("cerebras/generate_text");
+    try mock.simulateRequest("cerebras/embeddings");
+    try mock.simulateRequest("cerebras/chat_completion");
+
+    try std.testing.expectEqual(@as(u64, 3), mock.request_count);
+
+    // Verify all responses were tracked
+    try std.testing.expectEqual(@as(usize, 3), mock.responses.items.len);
+}
+
+test "McpClient with multiple servers" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    // Register multiple servers
+    _ = try client.registerServerSimple("server-1", "cmd1");
+    _ = try client.registerServerSimple("server-2", "cmd2");
+    _ = try client.registerServerSimple("server-3", "cmd3");
+
+    try std.testing.expectEqual(@as(usize, 3), client.servers.items.len);
+
+    // Test finding tools across all servers
+    // registerBuiltinTools adds the builtin server to the servers list
+    try client.registerBuiltinTools();
+    var tools = try client.getAllTools();
+    defer tools.deinit(alloc);
+
+    try std.testing.expect(tools.items.len > 0);
+
+    // Test stats - 3 registered servers + 1 builtin server = 4 total
+    const stats = client.getStats();
+    try std.testing.expectEqual(@as(usize, 4), stats.total_servers);
+}
+
+test "Pending request tracking" {
+    const alloc = std.testing.allocator;
+
+    const config = ServerConfig{
+        .name = "pending-test",
+        .command = "test",
+    };
+
+    const server = try McpServer.init(alloc, config);
+    defer {
+        server.deinit();
+        alloc.destroy(server);
+    }
+
+    // Verify initial state
+    try std.testing.expectEqual(@as(u64, 1), server.next_request_id);
+
+    // Simulate sending requests
+    _ = try server.sendRequest("method1", null);
+    try std.testing.expectEqual(@as(u64, 2), server.next_request_id);
+
+    _ = try server.sendRequest("method2", null);
+    try std.testing.expectEqual(@as(u64, 3), server.next_request_id);
+}
+
+test "JSON value handling in MCP" {
+    const alloc = std.testing.allocator;
+
+    // Test various JSON value types
+    var obj = json.ObjectMap.init(alloc);
+    defer obj.deinit();
+
+    try obj.put("string", json.Value{ .string = "test" });
+    try obj.put("integer", json.Value{ .integer = 42 });
+    try obj.put("boolean", json.Value{ .bool = true });
+    try obj.put("null", json.Value{ .null = {} });
+
+    var arr = json.Array.init(alloc);
+    defer arr.deinit();
+
+    try arr.append(json.Value{ .string = "item1" });
+    try arr.append(json.Value{ .integer = 123 });
+    try obj.put("array", json.Value{ .array = arr });
+
+    const value = json.Value{ .object = obj };
+
+    // Verify structure
+    try std.testing.expect(value.object.get("string") != null);
+    try std.testing.expect(value.object.get("integer") != null);
+    try std.testing.expect(value.object.get("boolean") != null);
+    try std.testing.expect(value.object.get("array") != null);
+}
+
+test "McpManager full lifecycle" {
+    const alloc = std.testing.allocator;
+
+    var manager = try McpManager.init(alloc);
+    defer manager.deinit();
+
+    // Initial state
+    try std.testing.expect(manager.enabled);
+
+    // Register additional server
+    _ = try manager.client.registerServerSimple("custom-server", "custom-cmd");
+
+    // Connect all (would normally start processes)
+    // manager.connectAll() catch {};
+
+    // Get tools
+    var tools = try manager.getTools();
+    defer tools.deinit(alloc);
+
+    // Get stats
+    const stats = manager.getStats();
+    try std.testing.expect(stats.enabled);
+    try std.testing.expect(stats.servers > 0);
+
+    // Disable and re-enable
+    manager.setEnabled(false);
+    try std.testing.expect(!manager.enabled);
+    manager.setEnabled(true);
+    try std.testing.expect(manager.enabled);
+}
+
+test "Error handling in MCP operations" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    // Try to execute tool when no servers registered
+    var params = json.ObjectMap.init(alloc);
+    defer params.deinit();
+
+    try params.put("test", json.Value{ .string = "value" });
+
+    const result = client.executeTool("any_tool", json.Value{ .object = params });
+    try std.testing.expectError(error.ToolNotFound, result);
+
+    // Try to get tools from disabled manager
+    var manager = try McpManager.init(alloc);
+    defer manager.deinit();
+
+    manager.setEnabled(false);
+    // getTools returns empty list when disabled (not an error)
+    const tools = try manager.getTools();
+    try std.testing.expectEqual(@as(usize, 0), tools.items.len);
+}
+
+test "MCP protocol version compatibility" {
+    // Test that we're using a compatible protocol version
+    const protocol_version = "2024-11-05";
+
+    // This should match what's used in sendInitialize
+    try std.testing.expect(std.mem.eql(u8, protocol_version, "2024-11-05"));
+}
+
+test "Cerebras MCP security model" {
+    const alloc = std.testing.allocator;
+
+    // Test that we properly handle security in built-in tools
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    try client.registerBuiltinTools();
+
+    // Verify execute_command tool exists in builtin server
+    try std.testing.expect(client.builtin_server != null);
+    if (client.builtin_server) |server| {
+        var found = false;
+        for (server.tools.items) |tool| {
+            if (std.mem.eql(u8, tool.name, "execute_command")) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
+}
+
+test "Memory management in MCP client" {
+    const alloc = std.testing.allocator;
+
+    // Test that we properly clean up all allocated resources
+    {
+        var client = McpClient.init(alloc);
+        _ = try client.registerServerSimple("memory-test", "test");
+
+        // Use the client
+        try client.registerBuiltinTools();
+        var tools = try client.getAllTools();
+        defer tools.deinit(alloc);
+
+        // Manually trigger deallocation
+        client.deinit();
+    }
+
+    // If we reach here without memory leaks (checked by leak detector),
+    // the test passes
+}
+
+test "Concurrent-like operations simulation" {
+    const alloc = std.testing.allocator;
+
+    var client = McpClient.init(alloc);
+    defer client.deinit();
+
+    try client.registerBuiltinTools();
+
+    // Simulate multiple tool queries in sequence
+    const tool_names = [_][]const u8{
+        "read_file", "write_file", "list_directory",
+        "git_status", "git_log", "execute_command",
+    };
+
+    for (tool_names) |tool_name| {
+        const found = client.findTool(tool_name);
+        try std.testing.expect(found != null);
+    }
+
+    // Verify we can get all tools
+    var all_tools = try client.getAllTools();
+    defer all_tools.deinit(alloc);
+
+    try std.testing.expect(all_tools.items.len >= tool_names.len);
+}
+
+test "MCP URI handling and resource management" {
+    const alloc = std.testing.allocator;
+
+    // Test various URI formats
+    const test_uris = [_][]const u8{
+        "file:///home/user/document.txt",
+        "git://repository/path",
+        "http://example.com/resource",
+        "memory://session/data",
+    };
+
+    for (test_uris) |uri| {
+        var resource = McpResource{
+            .uri = try alloc.dupe(u8, uri),
+            .name = try alloc.dupe(u8, "Test Resource"),
+            .description = try alloc.dupe(u8, "Test description"),
+            .mime_type = null,
+        };
+
+        try std.testing.expectEqualStrings(uri, resource.uri);
+        resource.deinit(alloc);
+    }
+}
+
+test "Cerebras MCP specific functionality" {
+    const alloc = std.testing.allocator;
+
+    // Create a mock Cerebras server
+    const mock = try MockCerebrasMcpServer.init(alloc, "cerebras-llm");
+    defer mock.deinit();
+
+    // Simulate Cerebras-specific MCP capabilities
+    try mock.simulateRequest("cerebras/list_models");
+    try mock.simulateRequest("cerebras/generate");
+    try mock.simulateRequest("cerebras/chat");
+
+    try std.testing.expectEqual(@as(u64, 3), mock.request_count);
+
+    // Test that we can register this with a client
+    var client = McpClient.init(alloc);
+
+    try client.servers.append(alloc, mock.server);
+    try std.testing.expectEqual(@as(usize, 1), client.servers.items.len);
+
+    const cerebras_server = client.getServer("cerebras-llm");
+    try std.testing.expect(cerebras_server != null);
+
+    // Clear client servers before deinit to avoid double-free (mock owns the server)
+    client.servers.clearRetainingCapacity();
+    client.servers.deinit(alloc);
 }

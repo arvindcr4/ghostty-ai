@@ -267,6 +267,143 @@ test_code_quality() {
 }
 
 # ============================================
+# Test Suite 9: Signal Handler Patterns
+# ============================================
+test_signal_handlers() {
+    echo "Test Suite 9: Signal Handler Patterns"
+    echo "--------------------------------------------"
+    info "Checking for proper signal connection patterns"
+
+    for file in "${AI_UI_FILES[@]}"; do
+        if [ -f "$file" ]; then
+            # Count signal connections
+            CONNECT_COUNT=$(/usr/bin/grep -c "connect" "$file" 2>/dev/null | tr -d '\n' || echo "0")
+            CONNECT_COUNT=${CONNECT_COUNT//[^0-9]/}
+            CONNECT_COUNT=${CONNECT_COUNT:-0}
+
+            if [ "$CONNECT_COUNT" -gt 0 ]; then
+                # Check for proper callback signatures (callconv(.c))
+                CALLCONV_COUNT=$(/usr/bin/grep -c "callconv(.c)" "$file" 2>/dev/null | tr -d '\n' || echo "0")
+                CALLCONV_COUNT=${CALLCONV_COUNT//[^0-9]/}
+                CALLCONV_COUNT=${CALLCONV_COUNT:-0}
+
+                if [ "$CALLCONV_COUNT" -gt 0 ]; then
+                    pass "$(basename "$file"): $CONNECT_COUNT signal connections with proper callconv"
+                else
+                    warn "$(basename "$file"): $CONNECT_COUNT connections but no callconv(.c) callbacks"
+                fi
+            fi
+        fi
+    done
+    echo ""
+}
+
+# ============================================
+# Test Suite 10: Null Safety Patterns
+# ============================================
+test_null_safety() {
+    echo "Test Suite 10: Null Safety Patterns"
+    echo "--------------------------------------------"
+    info "Checking for proper null/optional handling"
+
+    for file in "${AI_UI_FILES[@]}"; do
+        if [ -f "$file" ]; then
+            # Check for orelse return pattern (safe unwrapping)
+            ORELSE_COUNT=$(/usr/bin/grep -c "orelse return" "$file" 2>/dev/null | tr -d '\n' || echo "0")
+            ORELSE_COUNT=${ORELSE_COUNT//[^0-9]/}
+            ORELSE_COUNT=${ORELSE_COUNT:-0}
+
+            # Check for if null checks
+            IF_NULL_COUNT=$(/usr/bin/grep -c "if (.*) |" "$file" 2>/dev/null | tr -d '\n' || echo "0")
+            IF_NULL_COUNT=${IF_NULL_COUNT//[^0-9]/}
+            IF_NULL_COUNT=${IF_NULL_COUNT:-0}
+
+            TOTAL_NULL_SAFE=$((ORELSE_COUNT + IF_NULL_COUNT))
+
+            if [ "$TOTAL_NULL_SAFE" -gt 0 ]; then
+                pass "$(basename "$file"): $TOTAL_NULL_SAFE null-safe patterns"
+            else
+                # Check if file uses optionals at all
+                if /usr/bin/grep -q "\?" "$file"; then
+                    warn "$(basename "$file"): uses optionals but no null-safe unwrapping found"
+                fi
+            fi
+        fi
+    done
+    echo ""
+}
+
+# ============================================
+# Test Suite 11: Callback Safety Patterns
+# ============================================
+test_callback_patterns() {
+    echo "Test Suite 11: Callback Safety Patterns"
+    echo "--------------------------------------------"
+    info "Checking for safe callback patterns (no dangling pointers)"
+
+    for file in "${AI_UI_FILES[@]}"; do
+        if [ -f "$file" ]; then
+            # Check for callbacks that properly handle self pointer
+            SELF_CALLBACKS=$(/usr/bin/grep -c "fn.*self.*callconv" "$file" 2>/dev/null | tr -d '\n' || echo "0")
+            SELF_CALLBACKS=${SELF_CALLBACKS//[^0-9]/}
+            SELF_CALLBACKS=${SELF_CALLBACKS:-0}
+
+            # Check for list item callbacks (safe pattern - gets item from list)
+            LIST_ITEM_CB=$(/usr/bin/grep -c "list_item.*getItem" "$file" 2>/dev/null | tr -d '\n' || echo "0")
+            LIST_ITEM_CB=${LIST_ITEM_CB//[^0-9]/}
+            LIST_ITEM_CB=${LIST_ITEM_CB:-0}
+
+            if [ "$SELF_CALLBACKS" -gt 0 ] || [ "$LIST_ITEM_CB" -gt 0 ]; then
+                pass "$(basename "$file"): safe callback patterns ($SELF_CALLBACKS self, $LIST_ITEM_CB list-item)"
+            fi
+        fi
+    done
+    echo ""
+}
+
+# ============================================
+# Test Suite 12: Import Consistency
+# ============================================
+test_import_consistency() {
+    echo "Test Suite 12: Import Consistency"
+    echo "--------------------------------------------"
+    info "Checking for required imports"
+
+    for file in "${AI_UI_FILES[@]}"; do
+        if [ -f "$file" ]; then
+            MISSING_IMPORTS=""
+
+            # Check for gtk import (required for UI components)
+            if ! /usr/bin/grep -q '@import("gtk")' "$file"; then
+                MISSING_IMPORTS="gtk "
+            fi
+
+            # Check for gobject import (required for GObject types)
+            if ! /usr/bin/grep -q '@import("gobject")' "$file"; then
+                MISSING_IMPORTS="${MISSING_IMPORTS}gobject "
+            fi
+
+            # Check for Common import (required for GObject helpers)
+            if ! /usr/bin/grep -q 'Common.*class.zig' "$file"; then
+                MISSING_IMPORTS="${MISSING_IMPORTS}Common "
+            fi
+
+            # Check for Application import (required for allocator)
+            if ! /usr/bin/grep -q 'Application.*application.zig' "$file"; then
+                MISSING_IMPORTS="${MISSING_IMPORTS}Application "
+            fi
+
+            if [ -z "$MISSING_IMPORTS" ]; then
+                pass "$(basename "$file"): all required imports present"
+            else
+                warn "$(basename "$file"): missing imports: $MISSING_IMPORTS"
+            fi
+        fi
+    done
+    echo ""
+}
+
+# ============================================
 # Run All Tests
 # ============================================
 echo "Running AI UI Component Tests..."
@@ -280,6 +417,10 @@ test_dispose_defensive
 test_gobject_pattern
 test_compilation
 test_code_quality
+test_signal_handlers
+test_null_safety
+test_callback_patterns
+test_import_consistency
 
 # ============================================
 # Summary

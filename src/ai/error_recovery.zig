@@ -15,13 +15,19 @@ pub const RecoveryStrategy = struct {
     retry_delay_ms: u64,
     fallback_action: ?[]const u8,
 
+    /// Type of recovery action to take
     pub const StrategyType = enum {
+        /// Retry the failed operation
         retry,
+        /// Use an alternative fallback action
         fallback,
+        /// Skip the failed operation and continue
         skip,
+        /// Stop execution entirely
         abort,
     };
 
+    /// Free allocated resources
     pub fn deinit(self: *const RecoveryStrategy, alloc: Allocator) void {
         if (self.fallback_action) |action| alloc.free(action);
     }
@@ -47,6 +53,7 @@ pub const ErrorRecoveryManager = struct {
         return manager;
     }
 
+    /// Clean up all registered strategies
     pub fn deinit(self: *ErrorRecoveryManager) void {
         for (self.strategies.items) |*strategy| strategy.deinit(self.alloc);
         self.strategies.deinit();

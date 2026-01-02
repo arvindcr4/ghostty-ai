@@ -25,6 +25,10 @@ pub const RedactionRule = struct {
         if (self.regex) |*r| {
             r.deinit(alloc);
         }
+        // Free duplicated strings
+        alloc.free(self.pattern);
+        alloc.free(self.replacement);
+        alloc.free(self.description);
     }
 };
 
@@ -33,14 +37,14 @@ pub const Redactor = struct {
     const Self = @This();
 
     alloc: Allocator,
-    rules: std.ArrayList(RedactionRule),
+    rules: std.ArrayListUnmanaged(RedactionRule),
     enabled_patterns: StringHashMap(bool),
 
     /// Initialize a new redactor
     pub fn init(alloc: Allocator) Self {
         var redactor: Self = .{
             .alloc = alloc,
-            .rules = std.ArrayList(RedactionRule).init(alloc),
+            .rules = .empty,
             .enabled_patterns = StringHashMap(bool).init(alloc),
         };
 
@@ -55,7 +59,7 @@ pub const Redactor = struct {
         for (self.rules.items) |*rule| {
             rule.deinit(self.alloc);
         }
-        self.rules.deinit();
+        self.rules.deinit(self.alloc);
         self.enabled_patterns.deinit();
     }
 
@@ -215,13 +219,19 @@ pub const Redactor = struct {
 
     /// Add a custom redaction rule
     pub fn addRule(self: *Self, pattern: []const u8, replacement: []const u8, description: []const u8) !void {
+        const duped_pattern = try self.alloc.dupe(u8, pattern);
+        errdefer self.alloc.free(duped_pattern);
+        const duped_replacement = try self.alloc.dupe(u8, replacement);
+        errdefer self.alloc.free(duped_replacement);
+        const duped_description = try self.alloc.dupe(u8, description);
+        errdefer self.alloc.free(duped_description);
         const rule = RedactionRule{
-            .pattern = try self.alloc.dupe(u8, pattern),
-            .replacement = try self.alloc.dupe(u8, replacement),
-            .description = try self.alloc.dupe(u8, description),
+            .pattern = duped_pattern,
+            .replacement = duped_replacement,
+            .description = duped_description,
             .regex = null,
         };
-        try self.rules.append(rule);
+        try self.rules.append(self.alloc, rule);
 
         // Enable by default
         try self.enabled_patterns.put(rule.pattern, true);
@@ -229,7 +239,7 @@ pub const Redactor = struct {
 
     /// Redact sensitive information from text
     pub fn redact(self: *Self, input: []const u8) ![]const u8 {
-        var result = try self.alloc.dupe(u8, input);
+        var result: []const u8 = try self.alloc.dupe(u8, input);
         errdefer self.alloc.free(result);
 
         for (self.rules.items) |*rule| {
@@ -249,8 +259,12 @@ pub const Redactor = struct {
             }
 
             // Apply redaction
+            const old_result = result;
             result = try self.applyRule(result, rule);
-            // result was reallocated, old one freed
+            // Free old buffer if applyRule created a new one
+            if (result.ptr != old_result.ptr) {
+                self.alloc.free(old_result);
+            }
         }
 
         return result;
@@ -265,7 +279,7 @@ pub const Redactor = struct {
             for (matches.items) |m| {
                 self.alloc.free(m);
             }
-            matches.deinit();
+            matches.deinit(self.alloc);
         }
 
         if (matches.items.len == 0) {
@@ -273,8 +287,8 @@ pub const Redactor = struct {
         }
 
         // Build redacted string
-        var result = std.ArrayList(u8).init(self.alloc);
-        errdefer result.deinit();
+        var result: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer result.deinit(self.alloc);
 
         var last_end: usize = 0;
         for (matches.items) |match_str| {
@@ -284,22 +298,22 @@ pub const Redactor = struct {
             const abs_end = abs_start + match_str.len;
 
             // Append everything before the match
-            try result.appendSlice(input[last_end..abs_start]);
+            try result.appendSlice(self.alloc, input[last_end..abs_start]);
 
             // Append replacement
-            try result.appendSlice(rule.replacement);
+            try result.appendSlice(self.alloc, rule.replacement);
 
             last_end = abs_end;
         }
 
         // Append remaining text
-        try result.appendSlice(input[last_end..]);
+        try result.appendSlice(self.alloc, input[last_end..]);
 
         // Free input if it was previously allocated
         // Note: This assumes input was allocated by our allocator
         // We need to be careful not to free static strings
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(self.alloc);
     }
 
     /// Enable or disable a specific redaction pattern
@@ -377,11 +391,11 @@ const Regex = struct {
         // Pattern is stored in RedactionRule, no allocation to free
     }
 
-    pub fn findAll(self: *const Regex, alloc: Allocator, input: []const u8) !std.ArrayList([]const u8) {
-        var matches = std.ArrayList([]const u8).init(alloc);
+    pub fn findAll(self: *const Regex, alloc: Allocator, input: []const u8) !std.ArrayListUnmanaged([]const u8) {
+        var matches: std.ArrayListUnmanaged([]const u8) = .empty;
         errdefer {
             for (matches.items) |m| alloc.free(m);
-            matches.deinit();
+            matches.deinit(alloc);
         }
 
         var pos: usize = 0;
@@ -398,7 +412,7 @@ const Regex = struct {
                 const token_len = end - start;
                 if (token_len >= self.min_length) {
                     const match = try alloc.dupe(u8, input[start..end]);
-                    try matches.append(match);
+                    try matches.append(alloc, match);
                 }
 
                 pos = end;

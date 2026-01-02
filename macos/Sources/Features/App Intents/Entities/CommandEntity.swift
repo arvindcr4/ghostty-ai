@@ -36,10 +36,12 @@ struct CommandEntity: AppEntity {
         TypeDisplayRepresentation(name: "Command Palette Command")
     }
 
+    // Note: title and description come from command configuration, not UI strings.
+    // These are user/app-defined command names and are intentionally not localized.
     var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(
-            title: LocalizedStringResource(stringLiteral: command.title),
-            subtitle: LocalizedStringResource(stringLiteral: command.description),
+            title: "\(command.title)",
+            subtitle: "\(command.description)"
         )
     }
 

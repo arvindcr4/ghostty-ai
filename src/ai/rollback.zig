@@ -16,12 +16,17 @@ pub const RollbackPoint = struct {
     working_directory: []const u8,
     git_state: ?GitState,
 
+    /// Git repository state at rollback point
     pub const GitState = struct {
+        /// Current branch name
         branch: []const u8,
+        /// Current commit hash
         commit: []const u8,
+        /// Whether there are uncommitted changes
         has_changes: bool,
     };
 
+    /// Free all allocated resources
     pub fn deinit(self: *RollbackPoint, alloc: Allocator) void {
         alloc.free(self.id);
         for (self.commands_executed.items) |cmd| alloc.free(cmd);
@@ -49,6 +54,7 @@ pub const RollbackManager = struct {
         };
     }
 
+    /// Clean up all rollback points
     pub fn deinit(self: *RollbackManager) void {
         for (self.rollback_points.items) |*point| point.deinit(self.alloc);
         self.rollback_points.deinit();

@@ -69,9 +69,9 @@ class VoiceInputManager: ObservableObject {
         debounceTask?.cancel()
         recognitionTask?.cancel()
 
-        let timer = UncheckedSendable(silenceTimer)
-        let engine = UncheckedSendable(audioEngine)
-        let request = UncheckedSendable(recognitionRequest)
+        let timer = UncheckedSendable(value: silenceTimer)
+        let engine = UncheckedSendable(value: audioEngine)
+        let request = UncheckedSendable(value: recognitionRequest)
 
         let cleanup = {
             timer.value?.invalidate()

@@ -14,7 +14,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const StringHashMap = std.StringHashMap;
 
 const log = std.log.scoped(.ai_collaboration);
@@ -32,27 +32,45 @@ pub const TeamMember = struct {
     joined_at: i64,
     metadata: StringHashMap([]const u8),
 
+    /// Team member role with associated permission levels
     pub const Role = enum {
+        /// Full control over all resources
         owner,
+        /// Administrative access without ownership
         admin,
+        /// Standard team member with execution rights
         member,
+        /// Read-only access to sessions
         viewer,
+        /// Temporary limited access
         guest,
     };
 
+    /// Permission flags for team member capabilities
     pub const Permissions = struct {
+        /// Can execute commands in terminal
         can_execute: bool = false,
+        /// Can edit shared content
         can_edit: bool = false,
+        /// Can share sessions externally
         can_share: bool = false,
+        /// Can invite new members
         can_invite: bool = false,
+        /// Can change member roles
         can_manage_roles: bool = false,
+        /// Can delete session history
         can_delete_sessions: bool = false,
     };
 
+    /// Current online status of a team member
     pub const Presence = enum {
+        /// Actively connected and available
         online,
+        /// Connected but inactive
         away,
+        /// Connected but not accepting interactions
         busy,
+        /// Not connected to session
         offline,
     };
 
@@ -102,6 +120,7 @@ pub const TeamMember = struct {
         };
     }
 
+    /// Free all team member resources
     pub fn deinit(self: *TeamMember, alloc: Allocator) void {
         alloc.free(self.id);
         alloc.free(self.name);
@@ -124,34 +143,47 @@ pub const Room = struct {
     owner_id: []const u8,
     created_at: i64,
     last_activity: i64,
-    members: ArrayList([]const u8),
+    members: ArrayListUnmanaged([]const u8),
     settings: RoomSettings,
     state: RoomState,
+    alloc: Allocator,
 
+    /// Configuration settings for a collaboration room
     pub const RoomSettings = struct {
+        /// Maximum number of concurrent members
         max_members: u32 = 10,
+        /// Whether guest users can join
         allow_guests: bool = false,
+        /// Require owner approval for new members
         require_approval: bool = true,
+        /// Auto-follow host cursor/view
         auto_follow_mode: bool = false,
+        /// Share clipboard across members
         share_clipboard: bool = false,
+        /// Broadcast terminal output to all
         share_terminal_output: bool = true,
     };
 
+    /// Current state of a collaboration room
     pub const RoomState = enum {
+        /// Room is actively being used
         active,
+        /// Room is temporarily suspended
         paused,
+        /// Room is closed and read-only
         archived,
     };
 
-    pub fn deinit(self: *Room, alloc: Allocator) void {
-        alloc.free(self.id);
-        alloc.free(self.name);
-        if (self.description) |desc| alloc.free(desc);
-        alloc.free(self.owner_id);
+    /// Free all room resources
+    pub fn deinit(self: *Room) void {
+        self.alloc.free(self.id);
+        self.alloc.free(self.name);
+        if (self.description) |desc| self.alloc.free(desc);
+        self.alloc.free(self.owner_id);
         for (self.members.items) |member_id| {
-            alloc.free(member_id);
+            self.alloc.free(member_id);
         }
-        self.members.deinit();
+        self.members.deinit(self.alloc);
     }
 };
 
@@ -164,27 +196,43 @@ pub const ActivityEvent = struct {
     payload: []const u8,
     timestamp: i64,
 
+    /// Type of activity event in the collaboration stream
     pub const EventType = enum {
         // Presence events
+        /// Member joined the room
         user_joined,
+        /// Member left the room
         user_left,
+        /// Member presence status changed
         presence_changed,
         // Content events
+        /// Command was executed
         command_executed,
+        /// Output was received
         output_received,
+        /// File content changed
         file_changed,
+        /// Cursor position moved
         cursor_moved,
+        /// Text selection changed
         selection_changed,
         // Collaboration events
+        /// Chat message sent
         message_sent,
+        /// Reaction emoji added
         reaction_added,
+        /// Code annotation created
         annotation_created,
+        /// Command suggestion made
         suggestion_made,
         // Room events
+        /// Room settings modified
         room_settings_changed,
+        /// Member role updated
         member_role_changed,
     };
 
+    /// Free all event resources
     pub fn deinit(self: *ActivityEvent, alloc: Allocator) void {
         alloc.free(self.id);
         alloc.free(self.room_id);
@@ -218,8 +266,9 @@ pub const Message = struct {
     content: []const u8,
     message_type: MessageType,
     timestamp: i64,
-    reactions: ArrayList(Reaction),
+    reactions: ArrayListUnmanaged(Reaction),
     reply_to: ?[]const u8,
+    alloc: Allocator,
 
     pub const MessageType = enum {
         text,
@@ -234,17 +283,17 @@ pub const Message = struct {
         user_id: []const u8,
     };
 
-    pub fn deinit(self: *Message, alloc: Allocator) void {
-        alloc.free(self.id);
-        alloc.free(self.room_id);
-        alloc.free(self.sender_id);
-        alloc.free(self.content);
+    pub fn deinit(self: *Message) void {
+        self.alloc.free(self.id);
+        self.alloc.free(self.room_id);
+        self.alloc.free(self.sender_id);
+        self.alloc.free(self.content);
         for (self.reactions.items) |r| {
-            alloc.free(r.emoji);
-            alloc.free(r.user_id);
+            self.alloc.free(r.emoji);
+            self.alloc.free(r.user_id);
         }
-        self.reactions.deinit();
-        if (self.reply_to) |rt| alloc.free(rt);
+        self.reactions.deinit(self.alloc);
+        if (self.reply_to) |rt| self.alloc.free(rt);
     }
 };
 
@@ -252,8 +301,8 @@ pub const Message = struct {
 pub const SyncState = struct {
     version: u64,
     last_sync: i64,
-    pending_changes: ArrayList(PendingChange),
-    conflicts: ArrayList(Conflict),
+    pending_changes: ArrayListUnmanaged(PendingChange),
+    conflicts: ArrayListUnmanaged(Conflict),
 
     pub const PendingChange = struct {
         id: []const u8,
@@ -304,11 +353,11 @@ pub const CollaborationManager = struct {
     config: CollaborationConfig,
     members: StringHashMap(*TeamMember),
     rooms: StringHashMap(*Room),
-    activities: ArrayList(*ActivityEvent),
-    messages: StringHashMap(ArrayList(*Message)),
+    activities: ArrayListUnmanaged(*ActivityEvent),
+    messages: StringHashMap(ArrayListUnmanaged(*Message)),
     cursors: StringHashMap(*SharedCursor),
     sync_state: SyncState,
-    event_callbacks: ArrayList(CallbackEntry),
+    event_callbacks: ArrayListUnmanaged(CallbackEntry),
     current_user_id: ?[]const u8,
     enabled: bool,
 
@@ -330,16 +379,16 @@ pub const CollaborationManager = struct {
             .config = config,
             .members = StringHashMap(*TeamMember).init(alloc),
             .rooms = StringHashMap(*Room).init(alloc),
-            .activities = ArrayList(*ActivityEvent).init(alloc),
-            .messages = StringHashMap(ArrayList(*Message)).init(alloc),
+            .activities = .empty,
+            .messages = StringHashMap(ArrayListUnmanaged(*Message)).init(alloc),
             .cursors = StringHashMap(*SharedCursor).init(alloc),
             .sync_state = .{
                 .version = 0,
                 .last_sync = 0,
-                .pending_changes = ArrayList(SyncState.PendingChange).init(alloc),
-                .conflicts = ArrayList(SyncState.Conflict).init(alloc),
+                .pending_changes = .empty,
+                .conflicts = .empty,
             },
-            .event_callbacks = ArrayList(CallbackEntry).init(alloc),
+            .event_callbacks = .empty,
             .current_user_id = null,
             .enabled = true,
         };
@@ -357,7 +406,7 @@ pub const CollaborationManager = struct {
         // Clean up rooms
         var room_iter = self.rooms.iterator();
         while (room_iter.next()) |entry| {
-            entry.value_ptr.*.deinit(self.alloc);
+            entry.value_ptr.*.deinit();
             self.alloc.destroy(entry.value_ptr.*);
         }
         self.rooms.deinit();
@@ -367,16 +416,16 @@ pub const CollaborationManager = struct {
             activity.deinit(self.alloc);
             self.alloc.destroy(activity);
         }
-        self.activities.deinit();
+        self.activities.deinit(self.alloc);
 
         // Clean up messages
         var msg_iter = self.messages.iterator();
         while (msg_iter.next()) |entry| {
             for (entry.value_ptr.items) |msg| {
-                msg.deinit(self.alloc);
+                msg.deinit();
                 self.alloc.destroy(msg);
             }
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(self.alloc);
         }
         self.messages.deinit();
 
@@ -398,16 +447,16 @@ pub const CollaborationManager = struct {
             self.alloc.free(change.id);
             self.alloc.free(change.data);
         }
-        self.sync_state.pending_changes.deinit();
+        self.sync_state.pending_changes.deinit(self.alloc);
 
         for (self.sync_state.conflicts.items) |conflict| {
             self.alloc.free(conflict.id);
             self.alloc.free(conflict.local_change);
             self.alloc.free(conflict.remote_change);
         }
-        self.sync_state.conflicts.deinit();
+        self.sync_state.conflicts.deinit(self.alloc);
 
-        self.event_callbacks.deinit();
+        self.event_callbacks.deinit(self.alloc);
 
         if (self.current_user_id) |uid| self.alloc.free(uid);
     }
@@ -490,22 +539,24 @@ pub const CollaborationManager = struct {
     }
 
     /// Get all team members
-    pub fn getAllMembers(self: *const CollaborationManager) !ArrayList(*TeamMember) {
-        var members = ArrayList(*TeamMember).init(self.alloc);
+    pub fn getAllMembers(self: *const CollaborationManager) !ArrayListUnmanaged(*TeamMember) {
+        var members: ArrayListUnmanaged(*TeamMember) = .empty;
+        errdefer members.deinit(self.alloc);
         var iter = self.members.iterator();
         while (iter.next()) |entry| {
-            try members.append(entry.value_ptr.*);
+            try members.append(self.alloc, entry.value_ptr.*);
         }
         return members;
     }
 
     /// Get online members
-    pub fn getOnlineMembers(self: *const CollaborationManager) !ArrayList(*TeamMember) {
-        var members = ArrayList(*TeamMember).init(self.alloc);
+    pub fn getOnlineMembers(self: *const CollaborationManager) !ArrayListUnmanaged(*TeamMember) {
+        var members: ArrayListUnmanaged(*TeamMember) = .empty;
+        errdefer members.deinit(self.alloc);
         var iter = self.members.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.*.presence == .online or entry.value_ptr.*.presence == .busy) {
-                try members.append(entry.value_ptr.*);
+                try members.append(self.alloc, entry.value_ptr.*);
             }
         }
         return members;
@@ -559,13 +610,16 @@ pub const CollaborationManager = struct {
             .owner_id = try self.alloc.dupe(u8, owner_id),
             .created_at = now,
             .last_activity = now,
-            .members = ArrayList([]const u8).init(self.alloc),
+            .members = .empty,
             .settings = .{},
             .state = .active,
+            .alloc = self.alloc,
         };
 
         // Add owner as first member
-        try room.members.append(try self.alloc.dupe(u8, owner_id));
+        const owner_id_copy = try self.alloc.dupe(u8, owner_id);
+        errdefer self.alloc.free(owner_id_copy);
+        try room.members.append(self.alloc, owner_id_copy);
         try self.rooms.put(room.id, room);
 
         log.debug("Created room: {s}", .{name});
@@ -587,7 +641,9 @@ pub const CollaborationManager = struct {
                 return error.RoomFull;
             }
 
-            try room.members.append(try self.alloc.dupe(u8, user_id));
+            const user_id_copy = try self.alloc.dupe(u8, user_id);
+            errdefer self.alloc.free(user_id_copy);
+            try room.members.append(self.alloc, user_id_copy);
             room.last_activity = std.time.timestamp();
 
             try self.emitEvent(.user_joined, user_id, room_id, &.{});
@@ -638,16 +694,17 @@ pub const CollaborationManager = struct {
             .content = try self.alloc.dupe(u8, content),
             .message_type = message_type,
             .timestamp = std.time.timestamp(),
-            .reactions = ArrayList(Message.Reaction).init(self.alloc),
+            .reactions = .empty,
             .reply_to = null,
+            .alloc = self.alloc,
         };
 
         // Get or create message list for room
         const gop = try self.messages.getOrPut(room_id);
         if (!gop.found_existing) {
-            gop.value_ptr.* = ArrayList(*Message).init(self.alloc);
+            gop.value_ptr.* = .empty;
         }
-        try gop.value_ptr.append(message);
+        try gop.value_ptr.append(self.alloc, message);
 
         try self.emitEvent(.message_sent, sender_id, room_id, content);
         return message;
@@ -700,12 +757,13 @@ pub const CollaborationManager = struct {
     }
 
     /// Get all cursors in a room
-    pub fn getRoomCursors(self: *const CollaborationManager, room_id: []const u8) !ArrayList(*SharedCursor) {
-        var cursors = ArrayList(*SharedCursor).init(self.alloc);
+    pub fn getRoomCursors(self: *const CollaborationManager, room_id: []const u8) !ArrayListUnmanaged(*SharedCursor) {
+        var cursors: ArrayListUnmanaged(*SharedCursor) = .empty;
+        errdefer cursors.deinit(self.alloc);
         var iter = self.cursors.iterator();
         while (iter.next()) |entry| {
             if (std.mem.eql(u8, entry.value_ptr.*.room_id, room_id)) {
-                try cursors.append(entry.value_ptr.*);
+                try cursors.append(self.alloc, entry.value_ptr.*);
             }
         }
         return cursors;
@@ -720,10 +778,13 @@ pub const CollaborationManager = struct {
         data: []const u8,
     ) !void {
         const id = try self.generateId("change");
-        try self.sync_state.pending_changes.append(.{
+        errdefer self.alloc.free(id);
+        const data_copy = try self.alloc.dupe(u8, data);
+        errdefer self.alloc.free(data_copy);
+        try self.sync_state.pending_changes.append(self.alloc, .{
             .id = id,
             .operation = operation,
-            .data = try self.alloc.dupe(u8, data),
+            .data = data_copy,
             .timestamp = std.time.timestamp(),
         });
         self.sync_state.version += 1;
@@ -763,7 +824,7 @@ pub const CollaborationManager = struct {
         user_data: ?*anyopaque,
         filter: ?ActivityEvent.EventType,
     ) !void {
-        try self.event_callbacks.append(.{
+        try self.event_callbacks.append(self.alloc, .{
             .callback = callback,
             .user_data = user_data,
             .event_filter = filter,
@@ -789,7 +850,7 @@ pub const CollaborationManager = struct {
         };
 
         // Add to activity stream
-        try self.activities.append(event);
+        try self.activities.append(self.alloc, event);
 
         // Trim activity history if needed
         while (self.activities.items.len > self.config.max_activity_history) {
@@ -811,8 +872,9 @@ pub const CollaborationManager = struct {
         self: *const CollaborationManager,
         room_id: []const u8,
         limit: usize,
-    ) !ArrayList(*ActivityEvent) {
-        var events = ArrayList(*ActivityEvent).init(self.alloc);
+    ) !ArrayListUnmanaged(*ActivityEvent) {
+        var events: ArrayListUnmanaged(*ActivityEvent) = .empty;
+        errdefer events.deinit(self.alloc);
         var count: usize = 0;
 
         // Iterate backwards to get most recent
@@ -821,7 +883,7 @@ pub const CollaborationManager = struct {
             i -= 1;
             const event = self.activities.items[i];
             if (std.mem.eql(u8, event.room_id, room_id)) {
-                try events.append(event);
+                try events.append(self.alloc, event);
                 count += 1;
             }
         }
@@ -840,10 +902,18 @@ pub const CollaborationManager = struct {
         var rng = std.Random.DefaultPrng.init(seed);
         rng.fill(&random_bytes);
 
-        return try std.fmt.allocPrint(self.alloc, "{s}_{d}_{x}", .{
+        // Format bytes as hex manually
+        const hex_chars = "0123456789abcdef";
+        var hex_str: [16]u8 = undefined;
+        for (random_bytes, 0..) |byte, i| {
+            hex_str[i * 2] = hex_chars[byte >> 4];
+            hex_str[i * 2 + 1] = hex_chars[byte & 0x0f];
+        }
+
+        return try std.fmt.allocPrint(self.alloc, "{s}_{d}_{s}", .{
             prefix,
             timestamp,
-            std.fmt.fmtSliceHexLower(&random_bytes),
+            &hex_str,
         });
     }
 
@@ -872,8 +942,9 @@ pub const CollaborationManager = struct {
 
     /// Serialize collaboration state to JSON
     pub fn toJson(self: *const CollaborationManager) ![]const u8 {
-        var buffer = ArrayList(u8).init(self.alloc);
-        const writer = buffer.writer();
+        var buffer: ArrayListUnmanaged(u8) = .empty;
+        errdefer buffer.deinit(self.alloc);
+        const writer = buffer.writer(self.alloc);
 
         try writer.writeAll("{\"members\":[");
 
@@ -912,7 +983,7 @@ pub const CollaborationManager = struct {
 
         try writer.writeAll("]}");
 
-        return buffer.toOwnedSlice();
+        return buffer.toOwnedSlice(self.alloc);
     }
 };
 
@@ -959,7 +1030,7 @@ test "CollaborationManager cursor sharing" {
     try manager.updateCursor("user1", room.id, 10, 5);
 
     var cursors = try manager.getRoomCursors(room.id);
-    defer cursors.deinit();
+    defer cursors.deinit(alloc);
 
     try std.testing.expectEqual(@as(usize, 1), cursors.items.len);
     try std.testing.expectEqual(@as(u32, 10), cursors.items[0].line);

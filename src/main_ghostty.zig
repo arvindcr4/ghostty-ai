@@ -203,6 +203,9 @@ test {
     _ = @import("unicode/props_uucode.zig");
     _ = @import("unicode/symbols_uucode.zig");
 
+    // AI module
+    _ = @import("ai/main.zig");
+
     // Extra
     _ = @import("extra/bash.zig");
     _ = @import("extra/fish.zig");

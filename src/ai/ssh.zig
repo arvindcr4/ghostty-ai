@@ -387,7 +387,7 @@ fn getHistoryPath(alloc: Allocator) ![]const u8 {
 }
 
 /// Parse SSH URL to extract components
-pub fn parseSshUrl(url: []const u8) !struct { user: ?[]const u8, host: []const u8, port: ?u16, path: ?[]const u8 } {
+pub fn parseSshUrl(alloc: Allocator, url: []const u8) !struct { user: ?[]const u8, host: [:0]const u8, port: ?u16, path: ?[]const u8 } {
     // ssh://[user@]host[:port][/path]
     const prefix = "ssh://";
     var remaining = url;
@@ -427,21 +427,23 @@ pub fn parseSshUrl(url: []const u8) !struct { user: ?[]const u8, host: []const u
 
     return .{
         .user = user,
-        .host = try std.alloc.dupeZ(u8, std.heap.page_allocator, remaining[host_start..host_end]),
+        .host = try alloc.dupeZ(u8, remaining[host_start..host_end]),
         .port = port,
         .path = path,
     };
 }
 
 test "parse SSH URL" {
-    const result = try parseSshUrl("ssh://user@host.example.com:2222/path");
+    const result = try parseSshUrl(std.testing.allocator, "ssh://user@host.example.com:2222/path");
+    defer std.testing.allocator.free(result.host);
     try std.testing.expectEqualStrings("user", result.user.?);
     try std.testing.expectEqualStrings("host.example.com", result.host);
     try std.testing.expectEqual(@as(u16, 2222), result.port.?);
 }
 
 test "parse SSH URL without port" {
-    const result = try parseSshUrl("user@host.example.com/path");
+    const result = try parseSshUrl(std.testing.allocator, "user@host.example.com/path");
+    defer std.testing.allocator.free(result.host);
     try std.testing.expectEqualStrings("user", result.user.?);
     try std.testing.expectEqualStrings("host.example.com", result.host);
     try std.testing.expect(null == result.port);

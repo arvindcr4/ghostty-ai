@@ -4,11 +4,9 @@
 
 (function () {
   // Only run on mobile devices
-  function isMobile() {
-    return window.innerWidth <= 767;
-  }
+  const isMobile = () => window.innerWidth <= 767;
 
-  function initMobileNav() {
+  const initMobileNav = () => {
     if (!isMobile()) return;
 
     const pageNav = document.getElementById("page-nav");
@@ -18,7 +16,10 @@
     const toggleBtn = document.createElement("button");
     toggleBtn.id = "page-nav-toggle";
     toggleBtn.setAttribute("aria-label", "Toggle page navigation");
-    toggleBtn.innerHTML = "<span></span><span></span><span></span>";
+    // Create hamburger menu spans using safe DOM methods
+    for (let i = 0; i < 3; i++) {
+      toggleBtn.appendChild(document.createElement("span"));
+    }
     document.body.appendChild(toggleBtn);
 
     // Create backdrop
@@ -27,23 +28,23 @@
     document.body.appendChild(backdrop);
 
     // Toggle function
-    function toggleNav() {
+    const toggleNav = () => {
       const isOpen = pageNav.classList.toggle("mobile-open");
       backdrop.classList.toggle("active", isOpen);
       document.body.style.overflow = isOpen ? "hidden" : "";
-    }
+    };
 
     // Event listeners
     toggleBtn.addEventListener("click", toggleNav);
     backdrop.addEventListener("click", toggleNav);
 
     // Close on escape key
-    document.addEventListener("keydown", function (e) {
+    document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && pageNav.classList.contains("mobile-open")) {
         toggleNav();
       }
     });
-  }
+  };
 
   // Initialize on load and resize
   if (document.readyState === "loading") {

@@ -12,6 +12,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** @defgroup wasm WebAssembly Utilities
  *
  * Convenience functions for allocating various types in WebAssembly builds.
@@ -38,7 +42,7 @@
  * // Create key encoder
  * const encoderPtr = exports.ghostty_wasm_alloc_opaque();
  * exports.ghostty_key_encoder_new(null, encoderPtr);
- * const encoder = view.getUint32(encoder, true);
+ * const encoder = view.getUint32(encoderPtr, true);
  *
  * // Configure encoder with Kitty protocol flags
  * const flagsPtr = exports.ghostty_wasm_alloc_u8();
@@ -153,6 +157,10 @@ size_t* ghostty_wasm_alloc_usize(void);
 void ghostty_wasm_free_usize(size_t *ptr);
 
 /** @} */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __wasm__ */
 

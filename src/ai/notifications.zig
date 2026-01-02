@@ -8,7 +8,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const builtin = @import("builtin");
 
 const log = std.log.scoped(.ai_notifications);
@@ -32,7 +32,7 @@ pub const Urgency = enum {
 pub const NotificationCategory = enum {
     ai_response,
     command_complete,
-    error,
+    @"error",
     warning,
     info,
     workflow_progress,
@@ -40,13 +40,14 @@ pub const NotificationCategory = enum {
 
 /// A notification to display
 pub const Notification = struct {
+    alloc: Allocator,
     title: []const u8,
     body: []const u8,
     urgency: Urgency,
     category: NotificationCategory,
     timeout_ms: i32,
     icon: ?[]const u8,
-    actions: ArrayList(NotificationAction),
+    actions: ArrayListUnmanaged(NotificationAction),
     timestamp: i64,
 
     pub const NotificationAction = struct {
@@ -56,13 +57,14 @@ pub const Notification = struct {
 
     pub fn init(alloc: Allocator, title: []const u8, body: []const u8) !Notification {
         return .{
+            .alloc = alloc,
             .title = try alloc.dupe(u8, title),
             .body = try alloc.dupe(u8, body),
             .urgency = .normal,
             .category = .info,
             .timeout_ms = 5000,
             .icon = null,
-            .actions = ArrayList(NotificationAction).init(alloc),
+            .actions = .empty,
             .timestamp = std.time.timestamp(),
         };
     }
@@ -75,7 +77,7 @@ pub const Notification = struct {
             alloc.free(action.id);
             alloc.free(action.label);
         }
-        @constCast(&self.actions).deinit();
+        @constCast(&self.actions).deinit(alloc);
     }
 
     pub fn setIcon(self: *Notification, alloc: Allocator, icon: []const u8) !void {
@@ -84,7 +86,7 @@ pub const Notification = struct {
     }
 
     pub fn addAction(self: *Notification, alloc: Allocator, id: []const u8, label: []const u8) !void {
-        try self.actions.append(.{
+        try self.actions.append(alloc, .{
             .id = try alloc.dupe(u8, id),
             .label = try alloc.dupe(u8, label),
         });
@@ -121,8 +123,8 @@ pub const NotificationConfig = struct {
 pub const NotificationManager = struct {
     alloc: Allocator,
     config: NotificationConfig,
-    history: ArrayList(NotificationHistoryEntry),
-    pending_notifications: ArrayList(Notification),
+    history: ArrayListUnmanaged(NotificationHistoryEntry),
+    pending_notifications: ArrayListUnmanaged(Notification),
     is_terminal_focused: bool,
 
     /// Callback for notification actions
@@ -134,8 +136,8 @@ pub const NotificationManager = struct {
         return .{
             .alloc = alloc,
             .config = .{},
-            .history = ArrayList(NotificationHistoryEntry).init(alloc),
-            .pending_notifications = ArrayList(Notification).init(alloc),
+            .history = .empty,
+            .pending_notifications = .empty,
             .is_terminal_focused = true,
             .on_action = null,
             .callback_user_data = null,
@@ -146,12 +148,12 @@ pub const NotificationManager = struct {
         for (self.history.items) |*entry| {
             entry.notification.deinit(self.alloc);
         }
-        self.history.deinit();
+        self.history.deinit(self.alloc);
 
         for (self.pending_notifications.items) |*notif| {
             notif.deinit(self.alloc);
         }
-        self.pending_notifications.deinit();
+        self.pending_notifications.deinit(self.alloc);
     }
 
     /// Configure the notification manager
@@ -182,7 +184,7 @@ pub const NotificationManager = struct {
         try self.deliverNotification(&notification);
 
         // Add to history
-        try self.history.append(.{
+        try self.history.append(self.alloc, .{
             .notification = notification,
             .delivered = true,
             .clicked = false,
@@ -210,7 +212,7 @@ pub const NotificationManager = struct {
         const icon = switch (category) {
             .ai_response => "dialog-information",
             .command_complete => "dialog-ok",
-            .error => "dialog-error",
+            .@"error" => "dialog-error",
             .warning => "dialog-warning",
             .info => "dialog-information",
             .workflow_progress => "emblem-synchronizing",
@@ -219,7 +221,7 @@ pub const NotificationManager = struct {
 
         try self.deliverNotification(&notification);
 
-        try self.history.append(.{
+        try self.history.append(self.alloc, .{
             .notification = notification,
             .delivered = true,
             .clicked = false,
@@ -273,30 +275,31 @@ pub const NotificationManager = struct {
     /// Deliver notification on Linux using notify-send
     fn deliverLinux(self: *const NotificationManager, notification: *const Notification) bool {
         _ = self;
+        const page_alloc = std.heap.page_allocator;
 
-        var args = ArrayList([]const u8).init(std.heap.page_allocator);
-        defer args.deinit();
+        var args: ArrayListUnmanaged([]const u8) = .empty;
+        defer args.deinit(page_alloc);
 
-        args.append("notify-send") catch return false;
-        args.append("-u") catch return false;
-        args.append(notification.urgency.toLinuxUrgency()) catch return false;
+        args.append(page_alloc, "notify-send") catch return false;
+        args.append(page_alloc, "-u") catch return false;
+        args.append(page_alloc, notification.urgency.toLinuxUrgency()) catch return false;
 
         if (notification.icon) |icon| {
-            args.append("-i") catch return false;
-            args.append(icon) catch return false;
+            args.append(page_alloc, "-i") catch return false;
+            args.append(page_alloc, icon) catch return false;
         }
 
         const timeout_str = std.fmt.allocPrint(
-            std.heap.page_allocator,
+            page_alloc,
             "{d}",
             .{notification.timeout_ms},
         ) catch return false;
-        defer std.heap.page_allocator.free(timeout_str);
+        defer page_alloc.free(timeout_str);
 
-        args.append("-t") catch return false;
-        args.append(timeout_str) catch return false;
-        args.append(notification.title) catch return false;
-        args.append(notification.body) catch return false;
+        args.append(page_alloc, "-t") catch return false;
+        args.append(page_alloc, timeout_str) catch return false;
+        args.append(page_alloc, notification.title) catch return false;
+        args.append(page_alloc, notification.body) catch return false;
 
         var child = std.process.Child.init(args.items, std.heap.page_allocator);
         child.spawn() catch return false;
@@ -379,7 +382,7 @@ pub const NotificationManager = struct {
             title,
             body,
             if (success) .normal else .critical,
-            if (success) .ai_response else .error,
+            if (success) .ai_response else .@"error",
         );
     }
 

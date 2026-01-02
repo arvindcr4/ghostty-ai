@@ -207,3 +207,58 @@ pub const Assistant = struct {
             (self.config.api_key.len > 0 or self.config.provider == .ollama);
     }
 };
+
+// ============================================================================
+// Unit Test Imports
+// ============================================================================
+// Import all AI module files to include their inline tests in the build
+
+test {
+    // Core AI modules
+    _ = @import("validation.zig");
+    _ = @import("client.zig");
+    _ = @import("redactor.zig");
+
+    // Feature modules
+    _ = @import("active.zig");
+    _ = @import("analytics.zig");
+    _ = @import("blocks.zig");
+    _ = @import("collaboration.zig");
+    _ = @import("command_corrections.zig");
+    _ = @import("command_history.zig");
+    _ = @import("completions.zig");
+    _ = @import("corrections.zig");
+    _ = @import("custom_prompts.zig");
+    _ = @import("documentation.zig");
+    _ = @import("embeddings.zig");
+    _ = @import("error_recovery.zig");
+    _ = @import("explanation.zig");
+    _ = @import("export_import.zig");
+    _ = @import("history.zig");
+    _ = @import("ide_editing.zig");
+    _ = @import("keyboard_shortcuts.zig");
+    _ = @import("knowledge_rules.zig");
+    _ = @import("mcp.zig");
+    _ = @import("multi_turn.zig");
+    _ = @import("next_command.zig");
+    _ = @import("notebooks.zig");
+    _ = @import("notifications.zig");
+    _ = @import("performance.zig");
+    _ = @import("plugins.zig");
+    _ = @import("progress.zig");
+    _ = @import("prompt_suggestions.zig");
+    _ = @import("rich_history.zig");
+    _ = @import("rollback.zig");
+    _ = @import("secrets.zig");
+    _ = @import("security.zig");
+    _ = @import("session_sharing.zig");
+    _ = @import("sharing.zig");
+    _ = @import("shell.zig");
+    _ = @import("ssh.zig");
+    _ = @import("suggestions.zig");
+    _ = @import("theme.zig");
+    _ = @import("theme_suggestions.zig");
+    _ = @import("voice.zig");
+    _ = @import("workflow.zig");
+    _ = @import("workflows.zig");
+}

@@ -10,7 +10,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const StringHashMap = std.StringHashMap;
 
 const log = std.log.scoped(.ai_security);
@@ -98,9 +98,9 @@ pub const ScannerConfig = struct {
 pub const SecurityScanner = struct {
     alloc: Allocator,
     config: ScannerConfig,
-    patterns: ArrayList(SecretPattern),
-    custom_patterns: ArrayList(SecretPattern),
-    scan_history: ArrayList(ScanResult),
+    patterns: ArrayListUnmanaged(SecretPattern),
+    custom_patterns: ArrayListUnmanaged(SecretPattern),
+    scan_history: ArrayListUnmanaged(ScanResult),
 
     pub const ScanResult = struct {
         timestamp: i64,
@@ -121,9 +121,9 @@ pub const SecurityScanner = struct {
         var scanner = SecurityScanner{
             .alloc = alloc,
             .config = .{},
-            .patterns = ArrayList(SecretPattern).init(alloc),
-            .custom_patterns = ArrayList(SecretPattern).init(alloc),
-            .scan_history = ArrayList(ScanResult).init(alloc),
+            .patterns = .empty,
+            .custom_patterns = .empty,
+            .scan_history = .empty,
         };
 
         scanner.registerDefaultPatterns() catch |err| {
@@ -134,12 +134,12 @@ pub const SecurityScanner = struct {
     }
 
     pub fn deinit(self: *SecurityScanner) void {
-        self.patterns.deinit();
-        self.custom_patterns.deinit();
+        self.patterns.deinit(self.alloc);
+        self.custom_patterns.deinit(self.alloc);
         for (self.scan_history.items) |*item| {
             self.alloc.free(item.source);
         }
-        self.scan_history.deinit();
+        self.scan_history.deinit(self.alloc);
     }
 
     /// Configure the scanner
@@ -150,7 +150,7 @@ pub const SecurityScanner = struct {
     /// Register default secret patterns
     fn registerDefaultPatterns(self: *SecurityScanner) !void {
         // OpenAI API Keys
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "OpenAI API Key",
             .prefixes = &[_][]const u8{ "sk-", "sk-proj-" },
             .min_length = 20,
@@ -162,7 +162,7 @@ pub const SecurityScanner = struct {
         });
 
         // Anthropic API Keys
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "Anthropic API Key",
             .prefixes = &[_][]const u8{"sk-ant-"},
             .min_length = 20,
@@ -174,7 +174,7 @@ pub const SecurityScanner = struct {
         });
 
         // GitHub Personal Access Tokens
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "GitHub PAT",
             .prefixes = &[_][]const u8{ "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_" },
             .min_length = 36,
@@ -186,7 +186,7 @@ pub const SecurityScanner = struct {
         });
 
         // AWS Keys
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "AWS Access Key ID",
             .prefixes = &[_][]const u8{ "AKIA", "ABIA", "ACCA", "AGPA", "AIDA", "AIPA", "ANPA", "ANVA", "APKA", "AROA", "ASCA", "ASIA" },
             .min_length = 20,
@@ -198,7 +198,7 @@ pub const SecurityScanner = struct {
         });
 
         // Slack Tokens
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "Slack Token",
             .prefixes = &[_][]const u8{ "xoxb-", "xoxp-", "xoxa-", "xoxr-", "xoxs-" },
             .min_length = 20,
@@ -210,7 +210,7 @@ pub const SecurityScanner = struct {
         });
 
         // Google Cloud Keys
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "Google Cloud API Key",
             .prefixes = &[_][]const u8{"AIza"},
             .min_length = 35,
@@ -222,7 +222,7 @@ pub const SecurityScanner = struct {
         });
 
         // Azure Keys
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "Azure Subscription Key",
             .prefixes = &[_][]const u8{},
             .min_length = 32,
@@ -234,7 +234,7 @@ pub const SecurityScanner = struct {
         });
 
         // JWT Tokens
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "JWT Token",
             .prefixes = &[_][]const u8{"eyJ"},
             .min_length = 30,
@@ -246,7 +246,7 @@ pub const SecurityScanner = struct {
         });
 
         // Private Keys (RSA, EC, DSA)
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "Private Key",
             .prefixes = &[_][]const u8{ "-----BEGIN RSA PRIVATE KEY", "-----BEGIN EC PRIVATE KEY", "-----BEGIN PRIVATE KEY", "-----BEGIN DSA PRIVATE KEY", "-----BEGIN OPENSSH PRIVATE KEY" },
             .min_length = 100,
@@ -258,7 +258,7 @@ pub const SecurityScanner = struct {
         });
 
         // Database URLs
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "Database URL",
             .prefixes = &[_][]const u8{ "postgres://", "postgresql://", "mysql://", "mongodb://", "mongodb+srv://", "redis://", "amqp://" },
             .min_length = 20,
@@ -270,7 +270,7 @@ pub const SecurityScanner = struct {
         });
 
         // SSH Private Keys
-        try self.patterns.append(.{
+        try self.patterns.append(self.alloc, .{
             .name = "SSH Private Key",
             .prefixes = &[_][]const u8{"-----BEGIN OPENSSH PRIVATE KEY"},
             .min_length = 100,
@@ -284,11 +284,11 @@ pub const SecurityScanner = struct {
 
     /// Add a custom pattern
     pub fn addCustomPattern(self: *SecurityScanner, pattern: SecretPattern) !void {
-        try self.custom_patterns.append(pattern);
+        try self.custom_patterns.append(self.alloc, pattern);
     }
 
     /// Scan text for secrets
-    pub fn scan(self: *SecurityScanner, text: []const u8) !ArrayList(DetectedSecret) {
+    pub fn scan(self: *SecurityScanner, text: []const u8) !ArrayListUnmanaged(DetectedSecret) {
         return self.scanWithType(text, .text, "inline");
     }
 
@@ -298,11 +298,11 @@ pub const SecurityScanner = struct {
         text: []const u8,
         scan_type: ScanResult.ScanType,
         source: []const u8,
-    ) !ArrayList(DetectedSecret) {
-        var secrets = ArrayList(DetectedSecret).init(self.alloc);
+    ) !ArrayListUnmanaged(DetectedSecret) {
+        var secrets: ArrayListUnmanaged(DetectedSecret) = .empty;
         errdefer {
             for (secrets.items) |*s| s.deinit(self.alloc);
-            secrets.deinit();
+            secrets.deinit(self.alloc);
         }
 
         if (!self.config.enabled) return secrets;
@@ -323,15 +323,13 @@ pub const SecurityScanner = struct {
         }
 
         // Limit results
-        if (secrets.items.len > self.config.max_secrets) {
-            while (secrets.items.len > self.config.max_secrets) {
-                const removed = secrets.pop();
-                removed.deinit(self.alloc);
-            }
+        while (secrets.items.len > self.config.max_secrets) {
+            var removed = secrets.pop().?;
+            removed.deinit(self.alloc);
         }
 
         // Record scan history
-        try self.scan_history.append(.{
+        try self.scan_history.append(self.alloc, .{
             .timestamp = std.time.timestamp(),
             .secrets_found = secrets.items.len,
             .scan_type = scan_type,
@@ -346,7 +344,7 @@ pub const SecurityScanner = struct {
         self: *SecurityScanner,
         text: []const u8,
         pattern: *const SecretPattern,
-        secrets: *ArrayList(DetectedSecret),
+        secrets: *ArrayListUnmanaged(DetectedSecret),
     ) !void {
         // Try each prefix
         for (pattern.prefixes) |prefix| {
@@ -372,7 +370,7 @@ pub const SecurityScanner = struct {
                             // Get location info
                             const location = self.getLocation(text, secret_start);
 
-                            try secrets.append(.{
+                            try secrets.append(self.alloc, .{
                                 .secret_type = pattern.secret_type,
                                 .value = try self.alloc.dupe(u8, secret_value),
                                 .redacted_value = try self.redact(secret_value),
@@ -400,7 +398,7 @@ pub const SecurityScanner = struct {
         self: *SecurityScanner,
         text: []const u8,
         pattern: *const SecretPattern,
-        secrets: *ArrayList(DetectedSecret),
+        secrets: *ArrayListUnmanaged(DetectedSecret),
     ) !void {
         // Look for assignment patterns (key=value, key: value)
         const assignment_patterns = [_][]const u8{
@@ -434,7 +432,7 @@ pub const SecurityScanner = struct {
                     if (entropy >= self.config.min_entropy) {
                         const location = self.getLocation(text, actual_start);
 
-                        try secrets.append(.{
+                        try secrets.append(self.alloc, .{
                             .secret_type = pattern.secret_type,
                             .value = try self.alloc.dupe(u8, secret_value),
                             .redacted_value = try self.redact(secret_value),
@@ -455,7 +453,7 @@ pub const SecurityScanner = struct {
     fn scanForHighEntropy(
         self: *SecurityScanner,
         text: []const u8,
-        secrets: *ArrayList(DetectedSecret),
+        secrets: *ArrayListUnmanaged(DetectedSecret),
     ) !void {
         // Look for quoted strings with high entropy
         const quote_chars = [_]u8{ '"', '\'' };
@@ -485,7 +483,7 @@ pub const SecurityScanner = struct {
                         if (!is_duplicate) {
                             const location = self.getLocation(text, start + 1);
 
-                            try secrets.append(.{
+                            try secrets.append(self.alloc, .{
                                 .secret_type = .generic_secret,
                                 .value = try self.alloc.dupe(u8, content),
                                 .redacted_value = try self.redact(content),
@@ -617,8 +615,8 @@ pub const SecurityScanner = struct {
         patterns_loaded: usize,
     } {
         var total_secrets: usize = 0;
-        for (self.scan_history.items) |scan| {
-            total_secrets += scan.secrets_found;
+        for (self.scan_history.items) |entry| {
+            total_secrets += entry.secrets_found;
         }
 
         return .{
@@ -687,7 +685,7 @@ test "SecurityScanner basic operations" {
     var secrets = try scanner.scan(test_text);
     defer {
         for (secrets.items) |*s| s.deinit(alloc);
-        secrets.deinit();
+        secrets.deinit(alloc);
     }
 
     // Should find the Anthropic key

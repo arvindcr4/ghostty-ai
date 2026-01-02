@@ -13,7 +13,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const StringHashMap = std.StringHashMap;
 
 const log = std.log.scoped(.ai_theme_suggestions);
@@ -224,7 +224,7 @@ pub const AISuggestedTheme = struct {
     confidence: f32,
     reason: []const u8,
     source: ThemeSource,
-    tags: ArrayList([]const u8),
+    tags: ArrayListUnmanaged([]const u8),
     accessibility: AccessibilityInfo,
     preview_ansi: ?[]const u8,
     created_at: i64,
@@ -241,7 +241,7 @@ pub const AISuggestedTheme = struct {
         wcag_level: WcagLevel,
         contrast_ratio: f32,
         color_blind_safe: bool,
-        issues: ArrayList([]const u8),
+        issues: ArrayListUnmanaged([]const u8),
 
         pub const WcagLevel = enum {
             aaa,
@@ -251,7 +251,7 @@ pub const AISuggestedTheme = struct {
         };
     };
 
-    pub fn deinit(self: *const AISuggestedTheme, alloc: Allocator) void {
+    pub fn deinit(self: *AISuggestedTheme, alloc: Allocator) void {
         alloc.free(self.id);
         alloc.free(self.name);
         alloc.free(self.description);
@@ -259,11 +259,11 @@ pub const AISuggestedTheme = struct {
         for (self.tags.items) |tag| {
             alloc.free(tag);
         }
-        self.tags.deinit();
+        self.tags.deinit(alloc);
         for (self.accessibility.issues.items) |issue| {
             alloc.free(issue);
         }
-        self.accessibility.issues.deinit();
+        self.accessibility.issues.deinit(alloc);
         if (self.preview_ansi) |preview| alloc.free(preview);
     }
 };
@@ -365,8 +365,8 @@ pub const ThemeContext = struct {
 
 /// User preference history for learning
 pub const PreferenceHistory = struct {
-    selections: ArrayList(Selection),
-    rejections: ArrayList(Rejection),
+    selections: ArrayListUnmanaged(Selection),
+    rejections: ArrayListUnmanaged(Rejection),
     time_patterns: StringHashMap(TimePattern),
 
     pub const Selection = struct {
@@ -409,11 +409,11 @@ pub const ThemeSuggestionManager = struct {
     alloc: Allocator,
     config: ThemeSuggestionConfig,
     enabled: bool,
-    builtin_themes: ArrayList(AISuggestedTheme),
-    cached_suggestions: ArrayList(AISuggestedTheme),
+    builtin_themes: ArrayListUnmanaged(AISuggestedTheme),
+    cached_suggestions: ArrayListUnmanaged(AISuggestedTheme),
     cache_timestamp: i64,
     preference_history: PreferenceHistory,
-    callbacks: ArrayList(CallbackEntry),
+    callbacks: ArrayListUnmanaged(CallbackEntry),
 
     const CallbackEntry = struct {
         callback: SuggestionCallback,
@@ -431,15 +431,15 @@ pub const ThemeSuggestionManager = struct {
             .alloc = alloc,
             .config = config,
             .enabled = true,
-            .builtin_themes = ArrayList(AISuggestedTheme).init(alloc),
-            .cached_suggestions = ArrayList(AISuggestedTheme).init(alloc),
+            .builtin_themes = .empty,
+            .cached_suggestions = .empty,
             .cache_timestamp = 0,
             .preference_history = .{
-                .selections = ArrayList(PreferenceHistory.Selection).init(alloc),
-                .rejections = ArrayList(PreferenceHistory.Rejection).init(alloc),
+                .selections = .empty,
+                .rejections = .empty,
                 .time_patterns = StringHashMap(PreferenceHistory.TimePattern).init(alloc),
             },
-            .callbacks = ArrayList(CallbackEntry).init(alloc),
+            .callbacks = .empty,
         };
 
         // Load built-in themes
@@ -454,32 +454,32 @@ pub const ThemeSuggestionManager = struct {
         for (self.builtin_themes.items) |*theme| {
             theme.deinit(self.alloc);
         }
-        self.builtin_themes.deinit();
+        self.builtin_themes.deinit(self.alloc);
 
         for (self.cached_suggestions.items) |*theme| {
             theme.deinit(self.alloc);
         }
-        self.cached_suggestions.deinit();
+        self.cached_suggestions.deinit(self.alloc);
 
         for (self.preference_history.selections.items) |sel| {
             self.alloc.free(sel.theme_id);
         }
-        self.preference_history.selections.deinit();
+        self.preference_history.selections.deinit(self.alloc);
 
         for (self.preference_history.rejections.items) |rej| {
             self.alloc.free(rej.theme_id);
             if (rej.reason) |r| self.alloc.free(r);
         }
-        self.preference_history.rejections.deinit();
+        self.preference_history.rejections.deinit(self.alloc);
 
         self.preference_history.time_patterns.deinit();
-        self.callbacks.deinit();
+        self.callbacks.deinit(self.alloc);
     }
 
     /// Load built-in themes
     fn loadBuiltinThemes(self: *ThemeSuggestionManager) !void {
         // Dracula theme
-        try self.builtin_themes.append(try self.createBuiltinTheme(
+        try self.builtin_themes.append(self.alloc, try self.createBuiltinTheme(
             "dracula",
             "Dracula",
             "A dark theme with vibrant colors",
@@ -517,7 +517,7 @@ pub const ThemeSuggestionManager = struct {
         ));
 
         // Solarized Dark
-        try self.builtin_themes.append(try self.createBuiltinTheme(
+        try self.builtin_themes.append(self.alloc, try self.createBuiltinTheme(
             "solarized-dark",
             "Solarized Dark",
             "Precision colors for machines and people",
@@ -555,7 +555,7 @@ pub const ThemeSuggestionManager = struct {
         ));
 
         // Nord
-        try self.builtin_themes.append(try self.createBuiltinTheme(
+        try self.builtin_themes.append(self.alloc, try self.createBuiltinTheme(
             "nord",
             "Nord",
             "An arctic, north-bluish color palette",
@@ -593,7 +593,7 @@ pub const ThemeSuggestionManager = struct {
         ));
 
         // Monokai Pro
-        try self.builtin_themes.append(try self.createBuiltinTheme(
+        try self.builtin_themes.append(self.alloc, try self.createBuiltinTheme(
             "monokai-pro",
             "Monokai Pro",
             "A refined Monokai for professional developers",
@@ -631,7 +631,7 @@ pub const ThemeSuggestionManager = struct {
         ));
 
         // One Light
-        try self.builtin_themes.append(try self.createBuiltinTheme(
+        try self.builtin_themes.append(self.alloc, try self.createBuiltinTheme(
             "one-light",
             "One Light",
             "Atom's iconic light theme",
@@ -651,9 +651,13 @@ pub const ThemeSuggestionManager = struct {
         colors: ColorScheme,
         tag_list: []const []const u8,
     ) !AISuggestedTheme {
-        var tags = ArrayList([]const u8).init(self.alloc);
+        var tags: ArrayListUnmanaged([]const u8) = .empty;
+        errdefer {
+            for (tags.items) |t| self.alloc.free(t);
+            tags.deinit(self.alloc);
+        }
         for (tag_list) |tag| {
-            try tags.append(try self.alloc.dupe(u8, tag));
+            try tags.append(self.alloc, try self.alloc.dupe(u8, tag));
         }
 
         const accessibility = self.analyzeAccessibility(colors);
@@ -675,7 +679,7 @@ pub const ThemeSuggestionManager = struct {
 
     /// Analyze accessibility of a color scheme
     fn analyzeAccessibility(self: *ThemeSuggestionManager, colors: ColorScheme) AISuggestedTheme.AccessibilityInfo {
-        var issues = ArrayList([]const u8).init(self.alloc);
+        var issues: ArrayListUnmanaged([]const u8) = .empty;
         const contrast = colors.foreground.contrastRatio(colors.background);
 
         // Check main contrast
@@ -689,15 +693,22 @@ pub const ThemeSuggestionManager = struct {
             .fail;
 
         if (level == .fail) {
-            issues.append(self.alloc.dupe(u8, "Insufficient contrast between foreground and background") catch "Low contrast") catch {};
+            // Free duplicated string if append fails to prevent memory leak
+            const dup = self.alloc.dupe(u8, "Insufficient contrast between foreground and background") catch null;
+            if (dup) |d| {
+                issues.append(self.alloc, d) catch self.alloc.free(d);
+            }
         }
 
         // Check ANSI color contrasts
         for (colors.ansi_colors, 0..) |ansi_color, i| {
             const ansi_contrast = ansi_color.contrastRatio(colors.background);
             if (ansi_contrast < 3.0) {
-                const msg = std.fmt.allocPrint(self.alloc, "ANSI color {d} has low contrast ({d:.1}:1)", .{ i, ansi_contrast }) catch "Low ANSI contrast";
-                issues.append(msg) catch {};
+                // Free allocated message if append fails to prevent memory leak
+                const msg = std.fmt.allocPrint(self.alloc, "ANSI color {d} has low contrast ({d:.1}:1)", .{ i, ansi_contrast }) catch null;
+                if (msg) |m| {
+                    issues.append(self.alloc, m) catch self.alloc.free(m);
+                }
             }
         }
 
@@ -719,11 +730,11 @@ pub const ThemeSuggestionManager = struct {
     pub fn generateSuggestions(
         self: *ThemeSuggestionManager,
         context: ThemeContext,
-    ) !ArrayList(AISuggestedTheme) {
-        var suggestions = ArrayList(AISuggestedTheme).init(self.alloc);
+    ) !ArrayListUnmanaged(AISuggestedTheme) {
+        var suggestions: ArrayListUnmanaged(AISuggestedTheme) = .empty;
         errdefer {
             for (suggestions.items) |*s| s.deinit(self.alloc);
-            suggestions.deinit();
+            suggestions.deinit(self.alloc);
         }
 
         if (!self.enabled) return suggestions;
@@ -735,18 +746,18 @@ pub const ThemeSuggestionManager = struct {
         {
             // Return cached suggestions
             for (self.cached_suggestions.items) |cached| {
-                try suggestions.append(try self.cloneTheme(cached));
+                try suggestions.append(self.alloc, try self.cloneTheme(cached));
             }
             return suggestions;
         }
 
         // Score and rank themes based on context
-        var scored_themes = ArrayList(struct { theme: *AISuggestedTheme, score: f32 }).init(self.alloc);
-        defer scored_themes.deinit();
+        var scored_themes: ArrayListUnmanaged(struct { theme: *AISuggestedTheme, score: f32 }) = .empty;
+        defer scored_themes.deinit(self.alloc);
 
         for (self.builtin_themes.items) |*theme| {
             const score = self.scoreThemeForContext(theme, context);
-            try scored_themes.append(.{ .theme = theme, .score = score });
+            try scored_themes.append(self.alloc, .{ .theme = theme, .score = score });
         }
 
         // Sort by score descending
@@ -769,7 +780,7 @@ pub const ThemeSuggestionManager = struct {
             // Free the old reason before replacing with context-specific one
             self.alloc.free(cloned.reason);
             cloned.reason = try self.generateReason(item.theme.*, context);
-            try suggestions.append(cloned);
+            try suggestions.append(self.alloc, cloned);
         }
 
         // Update cache
@@ -778,7 +789,7 @@ pub const ThemeSuggestionManager = struct {
         }
         self.cached_suggestions.clearRetainingCapacity();
         for (suggestions.items) |suggestion| {
-            try self.cached_suggestions.append(try self.cloneTheme(suggestion));
+            try self.cached_suggestions.append(self.alloc, try self.cloneTheme(suggestion));
         }
         self.cache_timestamp = now;
 
@@ -870,8 +881,9 @@ pub const ThemeSuggestionManager = struct {
 
     /// Generate reason for suggestion
     fn generateReason(self: *ThemeSuggestionManager, theme: AISuggestedTheme, context: ThemeContext) ![]const u8 {
-        var reasons = ArrayList(u8).init(self.alloc);
-        const writer = reasons.writer();
+        var reasons: ArrayListUnmanaged(u8) = .empty;
+        errdefer reasons.deinit(self.alloc);
+        const writer = reasons.writer(self.alloc);
 
         try writer.writeAll("Recommended because: ");
 
@@ -922,28 +934,51 @@ pub const ThemeSuggestionManager = struct {
             try writer.writeAll("matches your preferences");
         }
 
-        return reasons.toOwnedSlice();
+        return reasons.toOwnedSlice(self.alloc);
     }
 
     /// Clone a theme
     fn cloneTheme(self: *ThemeSuggestionManager, theme: AISuggestedTheme) !AISuggestedTheme {
-        var tags = ArrayList([]const u8).init(self.alloc);
+        var tags: ArrayListUnmanaged([]const u8) = .empty;
+        errdefer {
+            for (tags.items) |tag| self.alloc.free(tag);
+            tags.deinit(self.alloc);
+        }
         for (theme.tags.items) |tag| {
-            try tags.append(try self.alloc.dupe(u8, tag));
+            try tags.append(self.alloc, try self.alloc.dupe(u8, tag));
         }
 
-        var issues = ArrayList([]const u8).init(self.alloc);
-        for (theme.accessibility.issues.items) |issue| {
-            try issues.append(try self.alloc.dupe(u8, issue));
+        var issues: ArrayListUnmanaged([]const u8) = .empty;
+        errdefer {
+            for (issues.items) |issue| self.alloc.free(issue);
+            issues.deinit(self.alloc);
         }
+        for (theme.accessibility.issues.items) |issue| {
+            try issues.append(self.alloc, try self.alloc.dupe(u8, issue));
+        }
+
+        const id = try self.alloc.dupe(u8, theme.id);
+        errdefer self.alloc.free(id);
+
+        const name = try self.alloc.dupe(u8, theme.name);
+        errdefer self.alloc.free(name);
+
+        const description = try self.alloc.dupe(u8, theme.description);
+        errdefer self.alloc.free(description);
+
+        const reason = try self.alloc.dupe(u8, theme.reason);
+        errdefer self.alloc.free(reason);
+
+        const preview_ansi = if (theme.preview_ansi) |p| try self.alloc.dupe(u8, p) else null;
+        // No errdefer needed - nothing can fail after this point
 
         return .{
-            .id = try self.alloc.dupe(u8, theme.id),
-            .name = try self.alloc.dupe(u8, theme.name),
-            .description = try self.alloc.dupe(u8, theme.description),
+            .id = id,
+            .name = name,
+            .description = description,
             .colors = theme.colors,
             .confidence = theme.confidence,
-            .reason = try self.alloc.dupe(u8, theme.reason),
+            .reason = reason,
             .source = theme.source,
             .tags = tags,
             .accessibility = .{
@@ -952,7 +987,7 @@ pub const ThemeSuggestionManager = struct {
                 .color_blind_safe = theme.accessibility.color_blind_safe,
                 .issues = issues,
             },
-            .preview_ansi = if (theme.preview_ansi) |p| try self.alloc.dupe(u8, p) else null,
+            .preview_ansi = preview_ansi,
             .created_at = theme.created_at,
         };
     }
@@ -966,8 +1001,10 @@ pub const ThemeSuggestionManager = struct {
     ) !void {
         if (!self.config.enable_learning) return;
 
-        try self.preference_history.selections.append(.{
-            .theme_id = try self.alloc.dupe(u8, theme_id),
+        const theme_id_copy = try self.alloc.dupe(u8, theme_id);
+        errdefer self.alloc.free(theme_id_copy);
+        try self.preference_history.selections.append(self.alloc, .{
+            .theme_id = theme_id_copy,
             .context = context,
             .timestamp = std.time.timestamp(),
             .rating = rating,
@@ -984,9 +1021,13 @@ pub const ThemeSuggestionManager = struct {
     ) !void {
         if (!self.config.enable_learning) return;
 
-        try self.preference_history.rejections.append(.{
-            .theme_id = try self.alloc.dupe(u8, theme_id),
-            .reason = if (reason) |r| try self.alloc.dupe(u8, r) else null,
+        const theme_id_copy = try self.alloc.dupe(u8, theme_id);
+        errdefer self.alloc.free(theme_id_copy);
+        const reason_copy = if (reason) |r| try self.alloc.dupe(u8, r) else null;
+        errdefer if (reason_copy) |r| self.alloc.free(r);
+        try self.preference_history.rejections.append(self.alloc, .{
+            .theme_id = theme_id_copy,
+            .reason = reason_copy,
             .timestamp = std.time.timestamp(),
         });
     }
@@ -1005,8 +1046,9 @@ pub const ThemeSuggestionManager = struct {
     pub fn generatePreview(self: *ThemeSuggestionManager, theme_id: []const u8) !?[]const u8 {
         const theme = self.getThemeById(theme_id) orelse return null;
 
-        var preview = ArrayList(u8).init(self.alloc);
-        const writer = preview.writer();
+        var preview: ArrayListUnmanaged(u8) = .empty;
+        errdefer preview.deinit(self.alloc);
+        const writer = preview.writer(self.alloc);
 
         // Generate ANSI escape sequence preview
         try writer.writeAll("Theme Preview: ");
@@ -1026,7 +1068,7 @@ pub const ThemeSuggestionManager = struct {
         }
         try writer.writeAll("\n");
 
-        return preview.toOwnedSlice();
+        return preview.toOwnedSlice(self.alloc);
     }
 
     /// Enable or disable suggestions
@@ -1045,7 +1087,7 @@ pub const ThemeSuggestionManager = struct {
         callback: SuggestionCallback,
         user_data: ?*anyopaque,
     ) !void {
-        try self.callbacks.append(.{
+        try self.callbacks.append(self.alloc, .{
             .callback = callback,
             .user_data = user_data,
         });
@@ -1082,7 +1124,7 @@ test "ThemeSuggestionManager generates suggestions" {
     var suggestions = try manager.generateSuggestions(context);
     defer {
         for (suggestions.items) |*s| s.deinit(alloc);
-        suggestions.deinit();
+        suggestions.deinit(alloc);
     }
 
     try std.testing.expect(suggestions.items.len > 0);
