@@ -617,7 +617,9 @@ pub const CollaborationManager = struct {
         };
 
         // Add owner as first member
-        try room.members.append(self.alloc, try self.alloc.dupe(u8, owner_id));
+        const owner_id_copy = try self.alloc.dupe(u8, owner_id);
+        errdefer self.alloc.free(owner_id_copy);
+        try room.members.append(self.alloc, owner_id_copy);
         try self.rooms.put(room.id, room);
 
         log.debug("Created room: {s}", .{name});
@@ -639,7 +641,9 @@ pub const CollaborationManager = struct {
                 return error.RoomFull;
             }
 
-            try room.members.append(self.alloc, try self.alloc.dupe(u8, user_id));
+            const user_id_copy = try self.alloc.dupe(u8, user_id);
+            errdefer self.alloc.free(user_id_copy);
+            try room.members.append(self.alloc, user_id_copy);
             room.last_activity = std.time.timestamp();
 
             try self.emitEvent(.user_joined, user_id, room_id, &.{});
@@ -774,10 +778,13 @@ pub const CollaborationManager = struct {
         data: []const u8,
     ) !void {
         const id = try self.generateId("change");
+        errdefer self.alloc.free(id);
+        const data_copy = try self.alloc.dupe(u8, data);
+        errdefer self.alloc.free(data_copy);
         try self.sync_state.pending_changes.append(self.alloc, .{
             .id = id,
             .operation = operation,
-            .data = try self.alloc.dupe(u8, data),
+            .data = data_copy,
             .timestamp = std.time.timestamp(),
         });
         self.sync_state.version += 1;

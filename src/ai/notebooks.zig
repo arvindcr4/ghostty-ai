@@ -232,8 +232,12 @@ pub const Notebook = struct {
         if (from_index >= self.cells.items.len or to_index >= self.cells.items.len) return;
         if (from_index == to_index) return;
 
-        const cell = self.cells.orderedRemove(from_index);
-        self.cells.insert(self.alloc, to_index, cell) catch return;
+        var cell = self.cells.orderedRemove(from_index);
+        self.cells.insert(self.alloc, to_index, cell) catch {
+            // Clean up cell resources if insert fails
+            cell.deinit(self.alloc);
+            return;
+        };
         self.updated_at = std.time.timestamp();
     }
 

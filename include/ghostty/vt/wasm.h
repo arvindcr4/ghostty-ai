@@ -12,6 +12,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** @defgroup wasm WebAssembly Utilities
  *
  * Convenience functions for allocating various types in WebAssembly builds.
@@ -153,6 +157,10 @@ size_t* ghostty_wasm_alloc_usize(void);
 void ghostty_wasm_free_usize(size_t *ptr);
 
 /** @} */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* __wasm__ */
 

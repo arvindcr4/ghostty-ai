@@ -1001,8 +1001,10 @@ pub const ThemeSuggestionManager = struct {
     ) !void {
         if (!self.config.enable_learning) return;
 
-        try self.preference_history.selections.append(.{
-            .theme_id = try self.alloc.dupe(u8, theme_id),
+        const theme_id_copy = try self.alloc.dupe(u8, theme_id);
+        errdefer self.alloc.free(theme_id_copy);
+        try self.preference_history.selections.append(self.alloc, .{
+            .theme_id = theme_id_copy,
             .context = context,
             .timestamp = std.time.timestamp(),
             .rating = rating,
@@ -1019,9 +1021,13 @@ pub const ThemeSuggestionManager = struct {
     ) !void {
         if (!self.config.enable_learning) return;
 
-        try self.preference_history.rejections.append(.{
-            .theme_id = try self.alloc.dupe(u8, theme_id),
-            .reason = if (reason) |r| try self.alloc.dupe(u8, r) else null,
+        const theme_id_copy = try self.alloc.dupe(u8, theme_id);
+        errdefer self.alloc.free(theme_id_copy);
+        const reason_copy = if (reason) |r| try self.alloc.dupe(u8, r) else null;
+        errdefer if (reason_copy) |r| self.alloc.free(r);
+        try self.preference_history.rejections.append(self.alloc, .{
+            .theme_id = theme_id_copy,
+            .reason = reason_copy,
             .timestamp = std.time.timestamp(),
         });
     }
@@ -1081,7 +1087,7 @@ pub const ThemeSuggestionManager = struct {
         callback: SuggestionCallback,
         user_data: ?*anyopaque,
     ) !void {
-        try self.callbacks.append(.{
+        try self.callbacks.append(self.alloc, .{
             .callback = callback,
             .user_data = user_data,
         });
