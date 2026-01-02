@@ -29,9 +29,8 @@ def detect_allocator_name(content: str) -> str:
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, content)
-        if match:
-            return match.group(1)
+        if match := re.search(pattern, content):
+            return match[1]
 
     # If no variable found, check if std.testing.allocator is used directly
     if 'std.testing.allocator' in content:
@@ -51,13 +50,8 @@ def fix_test_file(filepath: Path):
     # Detect the allocator variable name used in this file
     alloc_name = detect_allocator_name(content)
 
-    # Find all variable names that are initialized as ArrayListUnmanaged
-    # Pattern: var <name> = std.ArrayListUnmanaged(...){}
-    arraylist_vars = set()
     pattern = r'var\s+(\w+)\s*=\s*std\.ArrayListUnmanaged\([^)]*\)\{\}'
-    for match in re.finditer(pattern, content):
-        arraylist_vars.add(match.group(1))
-
+    arraylist_vars = {match.group(1) for match in re.finditer(pattern, content)}
     # Also look for: var <name>: std.ArrayListUnmanaged(...) = ...
     pattern2 = r'var\s+(\w+)\s*:\s*std\.ArrayListUnmanaged\([^)]*\)'
     for match in re.finditer(pattern2, content):

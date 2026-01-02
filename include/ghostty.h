@@ -767,7 +767,7 @@ typedef enum {
 // apprt.surface.Message.ChildExited
 typedef struct {
   uint32_t exit_code;
-  uint64_t timetime_ms;
+  uint64_t runtime_ms;
 } ghostty_surface_message_childexited_s;
 
 // terminal.osc.Command.ProgressReport.State
@@ -976,7 +976,7 @@ typedef union {
 typedef struct {
   ghostty_ipc_target_tag_e tag;
   ghostty_ipc_target_u target;
-} chostty_ipc_target_s;
+} ghostty_ipc_target_s;
 
 // apprt.ipc.Action.NewWindow
 typedef struct {
@@ -1100,7 +1100,7 @@ bool ghostty_surface_quicklook_word(ghostty_surface_t, ghostty_text_s*);
 #endif
 
 ghostty_inspector_t ghostty_surface_inspector(ghostty_surface_t);
-void ghostty_inspector_free(ghostty_surface_t);
+void ghostty_inspector_free(ghostty_inspector_t);
 void ghostty_inspector_set_focus(ghostty_inspector_t, bool);
 void ghostty_inspector_set_content_scale(ghostty_inspector_t, double, double);
 void ghostty_inspector_set_size(ghostty_inspector_t, uint32_t, uint32_t);

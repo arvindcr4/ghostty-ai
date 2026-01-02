@@ -796,10 +796,15 @@ pub const NotebookManager = struct {
                     else
                         null;
 
+                    // Allocate stdout first, use errdefer to free on error
+                    const stdout = try self.alloc.dupe(u8, exec_result.object.get("stdout").?.string);
+                    errdefer self.alloc.free(stdout);
+                    const stderr = try self.alloc.dupe(u8, exec_result.object.get("stderr").?.string);
+
                     cell.execution_result = .{
                         .exit_code = exit_code,
-                        .stdout = try self.alloc.dupe(u8, exec_result.object.get("stdout").?.string),
-                        .stderr = try self.alloc.dupe(u8, exec_result.object.get("stderr").?.string),
+                        .stdout = stdout,
+                        .stderr = stderr,
                         .duration_ms = @intCast(exec_result.object.get("duration_ms").?.integer),
                         .timestamp = @intCast(exec_result.object.get("timestamp").?.integer),
                         .truncated = false,

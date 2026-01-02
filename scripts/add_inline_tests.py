@@ -186,15 +186,13 @@ def main():
 
         # Check if already has tests
         if has_tests(content):
-            print(f"  Already has tests, skipping")
+            print("  Already has tests, skipping")
             stats["skipped"] += 1
             continue
 
         # Generate tests
         print("  Generating inline tests...")
-        response = generate_inline_tests(filename, content)
-
-        if response:
+        if response := generate_inline_tests(filename, content):
             tests = extract_tests(response)
             if tests and len(tests) > 100:
                 append_tests_to_file(filepath, tests)

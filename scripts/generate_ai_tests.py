@@ -128,7 +128,7 @@ Focus on:
 Be concise and specific."""
 
     # Try with current client, rotate on rate limit
-    for attempt in range(len(clients)):
+    for _ in range(len(clients)):
         try:
             response = get_client().chat.completions.create(
                 model="zai-glm-4.6",
@@ -183,7 +183,7 @@ test "descriptive test name" {{
 Generate 5-10 focused, well-documented tests. Output ONLY the test code, no explanations."""
 
     # Try with current client, rotate on rate limit
-    for attempt in range(len(clients)):
+    for _ in range(len(clients)):
         try:
             response = get_client().chat.completions.create(
                 model="zai-glm-4.6",
@@ -238,10 +238,8 @@ def extract_zig_tests(response: str) -> str:
         if stripped.startswith('const module = @import('):
             continue
         # Skip lines that import the module we're testing (header handles this)
-        if '@import("' in stripped and '.zig")' in stripped and stripped.startswith('const '):
-            # Extract the filename and check if it matches our module pattern
-            if '= @import("' in stripped:
-                continue
+        if '@import("' in stripped and '.zig")' in stripped and stripped.startswith('const ') and '= @import("' in stripped:
+            continue
         filtered_lines.append(line)
 
     return '\n'.join(filtered_lines).strip()
@@ -288,8 +286,10 @@ Generated using Cerebras SDK
     report += f"""
 ## Summary
 - Total files: {len(results)}
-- Successful: {sum(1 for r in results if r.get('success'))}
-- Failed: {sum(1 for r in results if not r.get('success'))}
+- Successful: {sum(bool(r.get('success'))
+               for r in results)}
+- Failed: {sum(bool(not r.get('success'))
+           for r in results)}
 
 ## Next Steps
 1. Review generated tests in src/ai/tests/
@@ -347,13 +347,8 @@ def main():
 
         # Generate tests
         print("  Generating tests...")
-        tests = generate_tests(content, filename, analysis["analysis"])
-
-        if tests:
-            # Extract actual test code
-            test_code = extract_zig_tests(tests)
-
-            if test_code:
+        if tests := generate_tests(content, filename, analysis["analysis"]):
+            if test_code := extract_zig_tests(tests):
                 save_tests(filename, test_code, output_dir)
                 results.append({"filename": filename, "success": True})
             else:
@@ -372,7 +367,8 @@ def main():
 
     print("\n" + "=" * 60)
     print("Test generation complete!")
-    print(f"Successful: {sum(1 for r in results if r.get('success'))}/{len(results)}")
+    print(f"Successful: {sum(bool(r.get('success'))
+                         for r in results)}/{len(results)}")
     print("=" * 60)
 
     return 0 if all(r.get("success") for r in results) else 1

@@ -33,18 +33,11 @@ def get_paths_to_open(files):
         path = location.get_path()
         if path and path not in paths:
             paths.append(path)
-    if 10 < len(paths):
-        # Let's not open anything if the user selected a lot of directories,
-        # to avoid accidentally spamming their desktop with dozends of
-        # new windows or tabs.  Ten is a totally arbitrary limit :)
-        return []
-    else:
-        return paths
+    return [] if len(paths) > 10 else paths
 
 
 def get_items_for_files(name, files):
-    paths = get_paths_to_open(files)
-    if paths:
+    if paths := get_paths_to_open(files):
         item = Nautilus.MenuItem(name=name, label='Open in Ghostty',
             icon='com.mitchellh.ghostty')
         item.connect('activate', open_in_ghostty_activated, paths)

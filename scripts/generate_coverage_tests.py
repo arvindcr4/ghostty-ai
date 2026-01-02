@@ -38,30 +38,21 @@ AI_MODULE_DIR = Path(__file__).parent.parent / "src" / "ai"
 
 def extract_functions(content: str) -> list:
     """Extract all function signatures from Zig code."""
-    functions = []
     # Match pub fn and fn declarations
     pattern = r'(?:pub\s+)?fn\s+(\w+)\s*\([^)]*\)\s*(?:![^{]+)?(?:\s*[^{]*)?{'
-    for match in re.finditer(pattern, content):
-        functions.append(match.group(1))
-    return functions
+    return [match.group(1) for match in re.finditer(pattern, content)]
 
 
 def extract_structs(content: str) -> list:
     """Extract all struct definitions."""
-    structs = []
     pattern = r'(?:pub\s+)?const\s+(\w+)\s*=\s*struct\s*{'
-    for match in re.finditer(pattern, content):
-        structs.append(match.group(1))
-    return structs
+    return [match.group(1) for match in re.finditer(pattern, content)]
 
 
 def extract_enums(content: str) -> list:
     """Extract all enum definitions."""
-    enums = []
     pattern = r'(?:pub\s+)?const\s+(\w+)\s*=\s*enum\s*(?:\([^)]*\))?\s*{'
-    for match in re.finditer(pattern, content):
-        enums.append(match.group(1))
-    return enums
+    return [match.group(1) for match in re.finditer(pattern, content)]
 
 
 def count_branches(content: str) -> dict:
@@ -85,11 +76,11 @@ def read_existing_tests(test_file: Path) -> str:
 
 def extract_tested_functions(test_content: str) -> set:
     """Extract function names that are already being tested."""
-    tested = set()
     # Look for test names and function calls in tests
     pattern = r'test\s+"[^"]*(\w+)[^"]*"'
-    for match in re.finditer(pattern, test_content):
-        tested.add(match.group(1).lower())
+    tested = {
+        match.group(1).lower() for match in re.finditer(pattern, test_content)
+    }
     # Also look for module.functionName calls
     pattern = r'module\.(\w+)\s*\('
     for match in re.finditer(pattern, test_content):
@@ -245,9 +236,9 @@ def main():
 
         # Generate additional tests
         print("  Generating comprehensive tests...")
-        new_tests = generate_comprehensive_tests(filename, content, existing_tests)
-
-        if new_tests:
+        if new_tests := generate_comprehensive_tests(
+            filename, content, existing_tests
+        ):
             test_code = extract_zig_code(new_tests)
             if test_code and len(test_code) > 100:
                 append_tests(test_file, test_code)
