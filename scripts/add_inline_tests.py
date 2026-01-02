@@ -3,15 +3,23 @@
 Add inline tests directly to Zig source files for 100% coverage.
 """
 
+import os
 import re
 import sys
 from pathlib import Path
 from cerebras.cloud.sdk import Cerebras
 
+# Cerebras API configuration - load from environment variables
 CEREBRAS_API_KEYS = [
-    "csk-5j8mmycv5m9fptjpwvwfnj86hptfy48vy92mcxxtfe993vf2",
-    "csk-vc38d5m3tkdneecmvpnch5krntfy8hxkwvx8ttrmtydktdw3",
+    os.environ.get("CEREBRAS_API_KEY_1"),
+    os.environ.get("CEREBRAS_API_KEY_2"),
 ]
+# Filter out None values
+CEREBRAS_API_KEYS = [key for key in CEREBRAS_API_KEYS if key]
+
+if not CEREBRAS_API_KEYS:
+    print("ERROR: No Cerebras API keys found. Set CEREBRAS_API_KEY_1 and/or CEREBRAS_API_KEY_2 environment variables.")
+    sys.exit(1)
 
 clients = [Cerebras(api_key=key) for key in CEREBRAS_API_KEYS]
 current_client_idx = 0

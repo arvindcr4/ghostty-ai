@@ -323,12 +323,9 @@ pub const SecurityScanner = struct {
         }
 
         // Limit results
-        if (secrets.items.len > self.config.max_secrets) {
-            while (secrets.items.len > self.config.max_secrets) {
-                if (secrets.pop()) |removed| {
-                    removed.deinit(self.alloc);
-                }
-            }
+        while (secrets.items.len > self.config.max_secrets) {
+            var removed = secrets.pop();
+            removed.deinit(self.alloc);
         }
 
         // Record scan history

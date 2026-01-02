@@ -1005,8 +1005,8 @@ pub const ThemeSuggestionManager = struct {
     pub fn generatePreview(self: *ThemeSuggestionManager, theme_id: []const u8) !?[]const u8 {
         const theme = self.getThemeById(theme_id) orelse return null;
 
-        var preview = ArrayListUnmanaged(u8).init(self.alloc);
-        const writer = preview.writer();
+        var preview: ArrayListUnmanaged(u8) = .empty;
+        const writer = preview.writer(self.alloc);
 
         // Generate ANSI escape sequence preview
         try writer.writeAll("Theme Preview: ");
@@ -1026,7 +1026,7 @@ pub const ThemeSuggestionManager = struct {
         }
         try writer.writeAll("\n");
 
-        return preview.toOwnedSlice();
+        return preview.toOwnedSlice(self.alloc);
     }
 
     /// Enable or disable suggestions

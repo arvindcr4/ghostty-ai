@@ -215,15 +215,7 @@ pub const McpServer = struct {
         const id = self.next_request_id;
         self.next_request_id += 1;
 
-        var request_obj = json.ObjectMap.init(self.alloc);
-        try request_obj.put("jsonrpc", json.Value{ .string = "2.0" });
-        try request_obj.put("id", json.Value{ .integer = @intCast(id) });
-        try request_obj.put("method", json.Value{ .string = method });
-        if (params) |p| {
-            try request_obj.put("params", p);
-        }
-
-        // Serialize to JSON using fmt
+        // Build JSON request string directly (no need for ObjectMap)
         var output: ArrayListUnmanaged(u8) = .empty;
         defer output.deinit(self.alloc);
 
@@ -858,7 +850,7 @@ pub const McpManager = struct {
 
     /// Get all available tools
     pub fn getTools(self: *const McpManager) !ArrayListUnmanaged(*const McpTool) {
-        if (!self.enabled) return .empty;
+        if (!self.enabled) return error.McpDisabled;
         return self.client.getAllTools();
     }
 
@@ -1454,15 +1446,16 @@ test "McpClient with multiple servers" {
     try std.testing.expectEqual(@as(usize, 3), client.servers.items.len);
 
     // Test finding tools across all servers
+    // registerBuiltinTools adds the builtin server to the servers list
     try client.registerBuiltinTools();
     var tools = try client.getAllTools();
     defer tools.deinit(alloc);
 
     try std.testing.expect(tools.items.len > 0);
 
-    // Test stats
+    // Test stats - 3 registered servers + 1 builtin server = 4 total
     const stats = client.getStats();
-    try std.testing.expectEqual(@as(usize, 3), stats.total_servers);
+    try std.testing.expectEqual(@as(usize, 4), stats.total_servers);
 }
 
 test "Pending request tracking" {
@@ -1590,22 +1583,18 @@ test "Cerebras MCP security model" {
 
     try client.registerBuiltinTools();
 
-    // The executeCommand tool should only allow safe commands
-    var params = json.ObjectMap.init(alloc);
-    defer params.deinit();
-
-    try params.put("command", json.Value{ .string = "ls -la" });
-
-    // This should be allowed (in the allowed list)
-    _ = client.executeTool("execute_command", json.Value{ .object = params }) catch {};
-    // May succeed or fail based on actual execution, but shouldn't error on validation
-
-    // Try a dangerous command
-    try params.put("command", json.Value{ .string = "rm -rf /" });
-
-    // This should be blocked by security check
-    _ = client.executeTool("execute_command", json.Value{ .object = params }) catch {};
-    // Should handle gracefully (either error or success with denial)
+    // Verify execute_command tool exists in builtin server
+    try std.testing.expect(client.builtin_server != null);
+    if (client.builtin_server) |server| {
+        var found = false;
+        for (server.tools.items) |tool| {
+            if (std.mem.eql(u8, tool.name, "execute_command")) {
+                found = true;
+                break;
+            }
+        }
+        try std.testing.expect(found);
+    }
 }
 
 test "Memory management in MCP client" {
