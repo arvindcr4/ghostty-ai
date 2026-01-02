@@ -113,12 +113,7 @@ pub const NotificationCenter = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *NotificationItem, alloc: Allocator) void {
-            alloc.free(self.title);
-            alloc.free(self.message);
-            if (self.action_label) |label| alloc.free(label);
-            if (self.action_id) |id| alloc.free(id);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {

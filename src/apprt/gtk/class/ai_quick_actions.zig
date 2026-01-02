@@ -90,14 +90,7 @@ pub const QuickActionsPanel = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *ActionItem, alloc: Allocator) void {
-            alloc.free(self.id);
-            alloc.free(self.label);
-            if (self.description) |desc| alloc.free(desc);
-            alloc.free(self.icon_name);
-            if (self.command) |cmd| alloc.free(cmd);
-            if (self.action) |act| alloc.free(act);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {
@@ -273,12 +266,16 @@ pub const QuickActionsPanel = extern struct {
             .{ .id = "processes", .label = "Processes", .icon = "system-run-symbolic", .command = "ps aux" },
         };
 
+        const store = priv.actions_store orelse return;
         for (actions) |action| {
-            const action_item = ActionItem.new(alloc, action.id, action.label, action.icon, action.command, null) catch continue;
-            if (priv.actions_store) |store| {
-                store.append(action_item.as(gobject.Object));
-            }
+            const action_item = ActionItem.new(alloc, action.id, action.label, action.icon, action.command, null) catch |err| {
+                log.err("Failed to allocate ActionItem for quick action '{s}': {}", .{ action.id, err });
+                continue;
+            };
+            store.append(action_item.as(gobject.Object));
         }
+
+        log.info("Loaded {d} quick actions", .{actions.len});
     }
 
     pub fn show(self: *Self, parent: *Window) void {

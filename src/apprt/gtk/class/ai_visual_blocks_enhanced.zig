@@ -84,11 +84,7 @@ pub const VisualBlocksEnhancedDialog = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *BlockGroupItem, alloc: Allocator) void {
-            alloc.free(self.id);
-            alloc.free(self.name);
-            if (self.description) |desc| alloc.free(desc);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {

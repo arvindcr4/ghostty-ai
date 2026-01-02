@@ -87,12 +87,7 @@ pub const SshManagerDialog = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *SshConnectionItem, alloc: Allocator) void {
-            alloc.free(self.name);
-            alloc.free(self.host);
-            alloc.free(self.username);
-            if (self.key_file) |key| alloc.free(key);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {

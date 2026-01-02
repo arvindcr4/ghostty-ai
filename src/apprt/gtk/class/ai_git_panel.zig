@@ -86,9 +86,7 @@ pub const GitPanelDialog = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *GitStatusItem, alloc: Allocator) void {
-            alloc.free(self.file);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {

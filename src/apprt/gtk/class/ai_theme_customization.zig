@@ -100,12 +100,7 @@ pub const ThemeCustomizationDialog = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *ThemeItem, alloc: Allocator) void {
-            alloc.free(self.name);
-            alloc.free(self.description);
-            alloc.free(self.colors);
-            if (self.preview_image) |img| alloc.free(img);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {

@@ -85,13 +85,7 @@ pub const ThemesGalleryDialog = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *ThemeGalleryItem, alloc: Allocator) void {
-            alloc.free(self.name);
-            alloc.free(self.description);
-            alloc.free(self.category);
-            alloc.free(self.preview_colors);
-            if (self.author) |auth| alloc.free(auth);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {

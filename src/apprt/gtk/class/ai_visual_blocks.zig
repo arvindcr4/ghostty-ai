@@ -63,7 +63,15 @@ pub const VisualBlocksDialog = extern struct {
             var parent: *gobject.Object.Class = undefined;
 
             fn init(class: *ItemClass) callconv(.c) void {
-                _ = class;
+                gobject.Object.virtual_methods.dispose.implement(class, &BlockItem.dispose);
+            }
+
+            fn dispose(self: *BlockItem) callconv(.c) void {
+                const alloc = Application.default().allocator();
+                alloc.free(self.title);
+                alloc.free(self.command);
+                if (self.output) |out| alloc.free(out);
+                gobject.Object.virtual_methods.dispose.call(ItemClass.parent, self);
             }
         };
 
@@ -78,11 +86,7 @@ pub const VisualBlocksDialog = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *BlockItem, alloc: Allocator) void {
-            alloc.free(self.title);
-            alloc.free(self.command);
-            if (self.output) |out| alloc.free(out);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {
@@ -255,18 +259,10 @@ pub const VisualBlocksDialog = extern struct {
 
     fn dispose(self: *Self) callconv(.c) void {
         const priv = getPriv(self);
-        const alloc = Application.default().allocator();
 
-        // Clean up all block items
+        // Just removeAll - GObject dispose on each item handles cleanup
         if (priv.blocks_store) |store| {
-            const n = store.getNItems();
-            var i: u32 = 0;
-            while (i < n) : (i += 1) {
-                if (store.getItem(i)) |item| {
-                    const block_item: *BlockItem = @ptrCast(@alignCast(item));
-                    block_item.deinit(alloc);
-                }
-            }
+            store.removeAll();
         }
 
         gobject.Object.virtual_methods.dispose.call(Class.parent, self.as(Parent));

@@ -87,12 +87,7 @@ pub const SessionManagerDialog = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *SessionItem, alloc: Allocator) void {
-            alloc.free(self.id);
-            alloc.free(self.title);
-            alloc.free(self.cwd);
-            alloc.free(self.shell);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {
@@ -273,8 +268,11 @@ pub const SessionManagerDialog = extern struct {
                         if (title.getNextSibling()) |cwd| {
                             cwd.as(gtk.Label).setText(session_item.cwd);
                             if (cwd.getNextSibling()) |meta| {
+                                // Use separate buffer for timestamp to avoid use-after-return
+                                var time_buf: [64]u8 = undefined;
+                                const time_str = formatTimestamp(&time_buf, session_item.last_used);
                                 var meta_buf: [256]u8 = undefined;
-                                const meta_text = std.fmt.bufPrintZ(&meta_buf, "{s} • {s}", .{ session_item.shell, formatTimestamp(session_item.last_used) }) catch "Session";
+                                const meta_text = std.fmt.bufPrintZ(&meta_buf, "{s} • {s}", .{ session_item.shell, time_str }) catch "Session";
                                 meta.as(gtk.Label).setText(meta_text);
                             }
                         }
@@ -284,21 +282,21 @@ pub const SessionManagerDialog = extern struct {
         }
     }
 
-    fn formatTimestamp(timestamp: i64) [:0]const u8 {
+    /// Format timestamp into caller-provided buffer to avoid use-after-return
+    fn formatTimestamp(buf: []u8, timestamp: i64) [:0]const u8 {
         const now = std.time.timestamp();
         const diff = now - timestamp;
-        var buf: [64]u8 = undefined;
         if (diff < 60) {
-            return std.fmt.bufPrintZ(&buf, "Just now", .{}) catch "Recently";
+            return std.fmt.bufPrintZ(buf, "Just now", .{}) catch "Recently";
         } else if (diff < 3600) {
-            const minutes = diff / 60;
-            return std.fmt.bufPrintZ(&buf, "{d} minutes ago", .{minutes}) catch "Recently";
+            const minutes = @divFloor(diff, 60);
+            return std.fmt.bufPrintZ(buf, "{d} minutes ago", .{minutes}) catch "Recently";
         } else if (diff < 86400) {
-            const hours = diff / 3600;
-            return std.fmt.bufPrintZ(&buf, "{d} hours ago", .{hours}) catch "Today";
+            const hours = @divFloor(diff, 3600);
+            return std.fmt.bufPrintZ(buf, "{d} hours ago", .{hours}) catch "Today";
         } else {
-            const days = diff / 86400;
-            return std.fmt.bufPrintZ(&buf, "{d} days ago", .{days}) catch "Earlier";
+            const days = @divFloor(diff, 86400);
+            return std.fmt.bufPrintZ(buf, "{d} days ago", .{days}) catch "Earlier";
         }
     }
 
@@ -341,9 +339,28 @@ pub const SessionManagerDialog = extern struct {
         log.info("Close session: {s}", .{session_item.id});
     }
 
-    fn loadSessions(_: *Self) void {
-        // TODO: Load sessions from terminal state
-        log.info("Loading sessions...", .{});
+    fn loadSessions(self: *Self) void {
+        const priv = getPriv(self);
+        const alloc = Application.default().allocator();
+        const store = priv.sessions_store orelse return;
+
+        // Stub data for predictable UI behavior until real session integration
+        const stub_sessions = [_]struct { id: []const u8, title: []const u8, cwd: []const u8, shell: []const u8, active: bool }{
+            .{ .id = "session-1", .title = "Main Terminal", .cwd = "/home/user/projects", .shell = "/bin/zsh", .active = true },
+            .{ .id = "session-2", .title = "Server Logs", .cwd = "/var/log", .shell = "/bin/bash", .active = false },
+            .{ .id = "session-3", .title = "Development", .cwd = "/home/user/dev", .shell = "/bin/zsh", .active = false },
+        };
+
+        for (stub_sessions) |session| {
+            const item = SessionItem.new(alloc, session.id, session.title, session.cwd, session.shell) catch |err| {
+                log.err("Failed to allocate SessionItem for '{s}': {}", .{ session.id, err });
+                continue;
+            };
+            item.is_active = session.active;
+            store.append(item.as(gobject.Object));
+        }
+
+        log.info("Loaded {d} stub sessions", .{stub_sessions.len});
     }
 
     pub fn show(self: *Self, parent: *Window) void {

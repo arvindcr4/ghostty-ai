@@ -88,9 +88,7 @@ pub const PerformanceAnalyticsDialog = extern struct {
             return self;
         }
 
-        pub fn deinit(self: *CommandStatsItem, alloc: Allocator) void {
-            alloc.free(self.command);
-        }
+        // Note: deinit removed - all cleanup handled by GObject dispose to avoid double-frees
     };
 
     pub const Class = extern struct {
