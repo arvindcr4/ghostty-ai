@@ -1,6 +1,0 @@
-{
-  "enabled": true,
-  "auto_review": true,
-  "review_on_push": true,
-  "review_on_pr": true
-}

@@ -21,7 +21,7 @@ jobs:
           fetch-depth: 0  # Full history for better analysis
 
       - name: Run CodeAnt AI Scan
-        uses: CodeAnt-AI/codeant-ci-scan-action@v0.0.3
+        uses: CodeAnt-AI/codeant-ci-scan-action@27b96c343d5d3d2019a0e1cf8d5186455446fc85  # v0.0.3
         with:
           access_token: ${{ secrets.CODEANT_ACCESS_TOKEN }}
 
