@@ -29,29 +29,48 @@ pub const NotebookCell = struct {
     execution_count: u32,
     metadata: CellMetadata,
 
+    /// Type of notebook cell content
     pub const CellType = enum {
+        /// Documentation in markdown format
         markdown,
+        /// Executable shell code
         code,
+        /// Execution output/results
         output,
+        /// Raw unprocessed content
         raw,
     };
 
+    /// Result of executing a code cell
     pub const ExecutionResult = struct {
+        /// Process exit code (null if not terminated)
         exit_code: ?i32,
+        /// Standard output captured from execution
         stdout: []const u8,
+        /// Standard error captured from execution
         stderr: []const u8,
+        /// Execution duration in milliseconds
         duration_ms: i64,
+        /// Unix timestamp when execution completed
         timestamp: i64,
+        /// Whether output was truncated due to size limits
         truncated: bool,
     };
 
+    /// Metadata associated with a notebook cell
     pub const CellMetadata = struct {
+        /// Whether cell display is collapsed
         collapsed: bool,
+        /// Whether cell output is scrollable
         scrolled: bool,
+        /// Whether cell content can be edited
         editable: bool,
+        /// Programming language for syntax highlighting
         language: []const u8,
+        /// Tags for cell categorization
         tags: ArrayListUnmanaged([]const u8),
 
+        /// Initialize with default metadata values
         pub fn init() CellMetadata {
             return .{
                 .collapsed = false,
@@ -62,12 +81,14 @@ pub const NotebookCell = struct {
             };
         }
 
+        /// Free all allocated metadata resources
         pub fn deinit(self: *CellMetadata, alloc: Allocator) void {
             for (self.tags.items) |tag| alloc.free(tag);
             self.tags.deinit(alloc);
         }
     };
 
+    /// Create a new notebook cell with the given parameters
     pub fn init(id: []const u8, cell_type: CellType, content: []const u8) NotebookCell {
         return .{
             .id = id,
@@ -79,6 +100,7 @@ pub const NotebookCell = struct {
         };
     }
 
+    /// Free all allocated cell resources
     pub fn deinit(self: *NotebookCell, alloc: Allocator) void {
         alloc.free(self.id);
         alloc.free(self.content);
@@ -117,12 +139,17 @@ pub const Notebook = struct {
     alloc: Allocator,
     next_cell_id: u32,
 
+    /// Information about the notebook execution kernel
     pub const KernelInfo = struct {
+        /// Kernel name identifier
         name: []const u8,
+        /// Kernel version string
         version: []const u8,
+        /// Shell path for command execution
         shell: []const u8,
     };
 
+    /// Create a new empty notebook with the given ID and title
     pub fn init(alloc: Allocator, id: []const u8, title: []const u8) !Notebook {
         return .{
             .id = try alloc.dupe(u8, id),
@@ -143,6 +170,7 @@ pub const Notebook = struct {
         };
     }
 
+    /// Free all notebook resources including cells and metadata
     pub fn deinit(self: *Notebook) void {
         self.alloc.free(self.id);
         self.alloc.free(self.title);

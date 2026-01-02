@@ -32,27 +32,45 @@ pub const TeamMember = struct {
     joined_at: i64,
     metadata: StringHashMap([]const u8),
 
+    /// Team member role with associated permission levels
     pub const Role = enum {
+        /// Full control over all resources
         owner,
+        /// Administrative access without ownership
         admin,
+        /// Standard team member with execution rights
         member,
+        /// Read-only access to sessions
         viewer,
+        /// Temporary limited access
         guest,
     };
 
+    /// Permission flags for team member capabilities
     pub const Permissions = struct {
+        /// Can execute commands in terminal
         can_execute: bool = false,
+        /// Can edit shared content
         can_edit: bool = false,
+        /// Can share sessions externally
         can_share: bool = false,
+        /// Can invite new members
         can_invite: bool = false,
+        /// Can change member roles
         can_manage_roles: bool = false,
+        /// Can delete session history
         can_delete_sessions: bool = false,
     };
 
+    /// Current online status of a team member
     pub const Presence = enum {
+        /// Actively connected and available
         online,
+        /// Connected but inactive
         away,
+        /// Connected but not accepting interactions
         busy,
+        /// Not connected to session
         offline,
     };
 
@@ -102,6 +120,7 @@ pub const TeamMember = struct {
         };
     }
 
+    /// Free all team member resources
     pub fn deinit(self: *TeamMember, alloc: Allocator) void {
         alloc.free(self.id);
         alloc.free(self.name);
@@ -129,21 +148,33 @@ pub const Room = struct {
     state: RoomState,
     alloc: Allocator,
 
+    /// Configuration settings for a collaboration room
     pub const RoomSettings = struct {
+        /// Maximum number of concurrent members
         max_members: u32 = 10,
+        /// Whether guest users can join
         allow_guests: bool = false,
+        /// Require owner approval for new members
         require_approval: bool = true,
+        /// Auto-follow host cursor/view
         auto_follow_mode: bool = false,
+        /// Share clipboard across members
         share_clipboard: bool = false,
+        /// Broadcast terminal output to all
         share_terminal_output: bool = true,
     };
 
+    /// Current state of a collaboration room
     pub const RoomState = enum {
+        /// Room is actively being used
         active,
+        /// Room is temporarily suspended
         paused,
+        /// Room is closed and read-only
         archived,
     };
 
+    /// Free all room resources
     pub fn deinit(self: *Room) void {
         self.alloc.free(self.id);
         self.alloc.free(self.name);
@@ -165,27 +196,43 @@ pub const ActivityEvent = struct {
     payload: []const u8,
     timestamp: i64,
 
+    /// Type of activity event in the collaboration stream
     pub const EventType = enum {
         // Presence events
+        /// Member joined the room
         user_joined,
+        /// Member left the room
         user_left,
+        /// Member presence status changed
         presence_changed,
         // Content events
+        /// Command was executed
         command_executed,
+        /// Output was received
         output_received,
+        /// File content changed
         file_changed,
+        /// Cursor position moved
         cursor_moved,
+        /// Text selection changed
         selection_changed,
         // Collaboration events
+        /// Chat message sent
         message_sent,
+        /// Reaction emoji added
         reaction_added,
+        /// Code annotation created
         annotation_created,
+        /// Command suggestion made
         suggestion_made,
         // Room events
+        /// Room settings modified
         room_settings_changed,
+        /// Member role updated
         member_role_changed,
     };
 
+    /// Free all event resources
     pub fn deinit(self: *ActivityEvent, alloc: Allocator) void {
         alloc.free(self.id);
         alloc.free(self.room_id);
