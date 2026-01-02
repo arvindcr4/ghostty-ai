@@ -89,14 +89,15 @@ pub const ThemeCustomizationDialog = extern struct {
             }
         };
 
-        pub fn new(alloc: Allocator, name: []const u8, description: []const u8, colors: []const u8) !*ThemeItem {
+        pub fn new(name: []const u8, description: []const u8, colors: []const u8) !*ThemeItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(ThemeItem, .{});
+            errdefer self.unref();
             self.name = try alloc.dupeZ(u8, name);
             errdefer alloc.free(self.name);
             self.description = try alloc.dupeZ(u8, description);
             errdefer alloc.free(self.description);
             self.colors = try alloc.dupeZ(u8, colors);
-            errdefer alloc.free(self.colors);
             return self;
         }
 
@@ -124,8 +125,7 @@ pub const ThemeCustomizationDialog = extern struct {
 
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
-        _ = self.refSink();
-        return self.ref();
+        return self.refSink();
     }
 
     fn init(self: *Self) callconv(.c) void {

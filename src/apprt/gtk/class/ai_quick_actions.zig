@@ -71,8 +71,10 @@ pub const QuickActionsPanel = extern struct {
             .parent_class = &ItemClass.parent,
         });
 
-        pub fn new(alloc: Allocator, id: []const u8, label: []const u8, icon_name: []const u8, command: ?[]const u8, action: ?[]const u8) !*ActionItem {
+        pub fn new(id: []const u8, label: []const u8, icon_name: []const u8, command: ?[]const u8, action: ?[]const u8) !*ActionItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(ActionItem, .{});
+            errdefer self.unref();
             self.id = try alloc.dupeZ(u8, id);
             errdefer alloc.free(self.id);
             self.label = try alloc.dupeZ(u8, label);
@@ -81,11 +83,9 @@ pub const QuickActionsPanel = extern struct {
             errdefer alloc.free(self.icon_name);
             if (command) |cmd| {
                 self.command = try alloc.dupeZ(u8, cmd);
-                errdefer alloc.free(self.command.?);
             }
             if (action) |act| {
                 self.action = try alloc.dupeZ(u8, act);
-                errdefer alloc.free(self.action.?);
             }
             return self;
         }
@@ -254,7 +254,6 @@ pub const QuickActionsPanel = extern struct {
 
     fn loadActions(self: *Self) void {
         const priv = getPriv(self);
-        const alloc = Application.default().allocator();
 
         // Add common quick actions
         const actions = [_]struct { id: []const u8, label: []const u8, icon: []const u8, command: []const u8 }{
@@ -268,7 +267,7 @@ pub const QuickActionsPanel = extern struct {
 
         const store = priv.actions_store orelse return;
         for (actions) |action| {
-            const action_item = ActionItem.new(alloc, action.id, action.label, action.icon, action.command, null) catch |err| {
+            const action_item = ActionItem.new(action.id, action.label, action.icon, action.command, null) catch |err| {
                 log.err("Failed to allocate ActionItem for quick action '{s}': {}", .{ action.id, err });
                 continue;
             };
@@ -278,12 +277,23 @@ pub const QuickActionsPanel = extern struct {
         log.info("Loaded {d} quick actions", .{actions.len});
     }
 
-    pub fn show(self: *Self, parent: *Window) void {
-        // Quick actions panel is typically shown as a sidebar or overlay
-        // For now, we'll present it as a window
-        if (parent.as(gtk.Window).getTransientFor()) |transient_parent| {
-            self.as(adw.NavigationView).as(gtk.Widget).setParent(transient_parent.as(gtk.Window));
-        }
-        // TODO: Implement proper presentation
+    /// Embed this NavigationView into a parent container widget.
+    /// Since QuickActionsPanel is an adw.NavigationView (not a window),
+    /// it must be embedded into an existing UI hierarchy rather than presented.
+    pub fn embedInto(self: *Self, container: *gtk.Box) void {
+        container.append(self.as(adw.NavigationView).as(gtk.Widget));
+        self.as(adw.NavigationView).as(gtk.Widget).setVisible(true);
+    }
+
+    /// Show this panel by making it visible. Caller must have already
+    /// embedded this panel into a container via embedInto().
+    pub fn show(self: *Self, _: *Window) void {
+        self.as(adw.NavigationView).as(gtk.Widget).setVisible(true);
+        log.info("Quick actions panel shown", .{});
+    }
+
+    /// Hide the panel without removing it from the container.
+    pub fn hide(self: *Self) void {
+        self.as(adw.NavigationView).as(gtk.Widget).setVisible(false);
     }
 };

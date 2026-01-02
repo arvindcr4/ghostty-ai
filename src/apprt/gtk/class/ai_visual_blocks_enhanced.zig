@@ -70,15 +70,16 @@ pub const VisualBlocksEnhancedDialog = extern struct {
             .parent_class = &ItemClass.parent,
         });
 
-        pub fn new(alloc: Allocator, id: []const u8, name: []const u8, description: ?[]const u8) !*BlockGroupItem {
+        pub fn new(id: []const u8, name: []const u8, description: ?[]const u8) !*BlockGroupItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(BlockGroupItem, .{});
+            errdefer self.unref();
             self.id = try alloc.dupeZ(u8, id);
             errdefer alloc.free(self.id);
             self.name = try alloc.dupeZ(u8, name);
             errdefer alloc.free(self.name);
             if (description) |desc| {
                 self.description = try alloc.dupeZ(u8, desc);
-                errdefer alloc.free(self.description.?);
             }
             self.created_at = std.time.timestamp();
             return self;

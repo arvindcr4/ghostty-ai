@@ -72,8 +72,10 @@ pub const SessionManagerDialog = extern struct {
             .parent_class = &ItemClass.parent,
         });
 
-        pub fn new(alloc: Allocator, id: []const u8, title: []const u8, cwd: []const u8, shell: []const u8) !*SessionItem {
+        pub fn new(id: []const u8, title: []const u8, cwd: []const u8, shell: []const u8) !*SessionItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(SessionItem, .{});
+            errdefer self.unref();
             self.id = try alloc.dupeZ(u8, id);
             errdefer alloc.free(self.id);
             self.title = try alloc.dupeZ(u8, title);
@@ -81,7 +83,6 @@ pub const SessionManagerDialog = extern struct {
             self.cwd = try alloc.dupeZ(u8, cwd);
             errdefer alloc.free(self.cwd);
             self.shell = try alloc.dupeZ(u8, shell);
-            errdefer alloc.free(self.shell);
             self.created_at = std.time.timestamp();
             self.last_used = std.time.timestamp();
             return self;
@@ -341,7 +342,6 @@ pub const SessionManagerDialog = extern struct {
 
     fn loadSessions(self: *Self) void {
         const priv = getPriv(self);
-        const alloc = Application.default().allocator();
         const store = priv.sessions_store orelse return;
 
         // Stub data for predictable UI behavior until real session integration
@@ -352,7 +352,7 @@ pub const SessionManagerDialog = extern struct {
         };
 
         for (stub_sessions) |session| {
-            const item = SessionItem.new(alloc, session.id, session.title, session.cwd, session.shell) catch |err| {
+            const item = SessionItem.new(session.id, session.title, session.cwd, session.shell) catch |err| {
                 log.err("Failed to allocate SessionItem for '{s}': {}", .{ session.id, err });
                 continue;
             };

@@ -76,10 +76,11 @@ pub const PerformanceAnalyticsDialog = extern struct {
             }
         };
 
-        pub fn new(alloc: Allocator, command: []const u8, execution_time_ms: u64, memory_usage_kb: u64, cpu_percent: f32, success_rate: f32, run_count: u32) !*CommandStatsItem {
+        pub fn new(command: []const u8, execution_time_ms: u64, memory_usage_kb: u64, cpu_percent: f32, success_rate: f32, run_count: u32) !*CommandStatsItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(CommandStatsItem, .{});
+            errdefer self.unref();
             self.command = try alloc.dupeZ(u8, command);
-            errdefer alloc.free(self.command);
             self.execution_time_ms = execution_time_ms;
             self.memory_usage_kb = memory_usage_kb;
             self.cpu_percent = cpu_percent;
@@ -112,8 +113,7 @@ pub const PerformanceAnalyticsDialog = extern struct {
 
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
-        _ = self.refSink();
-        return self.ref();
+        return self.refSink();
     }
 
     fn init(self: *Self) callconv(.c) void {

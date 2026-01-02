@@ -94,8 +94,10 @@ pub const NotificationCenter = extern struct {
             }
         };
 
-        pub fn new(alloc: Allocator, title: []const u8, message: []const u8, notification_type: NotificationItem.NotificationType, action_label: ?[]const u8, action_id: ?[]const u8) !*NotificationItem {
+        pub fn new(title: []const u8, message: []const u8, notification_type: NotificationItem.NotificationType, action_label: ?[]const u8, action_id: ?[]const u8) !*NotificationItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(NotificationItem, .{});
+            errdefer self.unref();
             self.title = try alloc.dupeZ(u8, title);
             errdefer alloc.free(self.title);
             self.message = try alloc.dupeZ(u8, message);
@@ -104,11 +106,9 @@ pub const NotificationCenter = extern struct {
             self.notification_type = notification_type;
             if (action_label) |label| {
                 self.action_label = try alloc.dupeZ(u8, label);
-                errdefer alloc.free(self.action_label.?);
             }
             if (action_id) |id| {
                 self.action_id = try alloc.dupeZ(u8, id);
-                errdefer alloc.free(self.action_id.?);
             }
             return self;
         }
@@ -269,9 +269,8 @@ pub const NotificationCenter = extern struct {
 
     pub fn addNotification(self: *Self, title: []const u8, message: []const u8, notification_type: NotificationItem.NotificationType, action_label: ?[]const u8, action_id: ?[]const u8) void {
         const priv = getPriv(self);
-        const alloc = Application.default().allocator();
 
-        const item = NotificationItem.new(alloc, title, message, notification_type, action_label, action_id) catch {
+        const item = NotificationItem.new(title, message, notification_type, action_label, action_id) catch {
             log.err("Failed to create notification item", .{});
             return;
         };

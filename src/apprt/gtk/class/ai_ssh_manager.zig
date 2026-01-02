@@ -57,10 +57,23 @@ pub const SshManagerDialog = extern struct {
 
             fn dispose(self: *SshConnectionItem) callconv(.c) void {
                 const alloc = Application.default().allocator();
-                alloc.free(self.name);
-                alloc.free(self.host);
-                alloc.free(self.username);
-                if (self.key_file) |key| alloc.free(key);
+                // Defensive checks to prevent double-free on repeated dispose calls
+                if (self.name.len > 0) {
+                    alloc.free(self.name);
+                    self.name = "";
+                }
+                if (self.host.len > 0) {
+                    alloc.free(self.host);
+                    self.host = "";
+                }
+                if (self.username.len > 0) {
+                    alloc.free(self.username);
+                    self.username = "";
+                }
+                if (self.key_file) |key| {
+                    alloc.free(key);
+                    self.key_file = null;
+                }
                 gobject.Object.virtual_methods.dispose.call(ItemClass.parent, self);
             }
         };
@@ -71,8 +84,10 @@ pub const SshManagerDialog = extern struct {
             .parent_class = &ItemClass.parent,
         });
 
-        pub fn new(alloc: Allocator, name: []const u8, host: []const u8, port: u16, username: []const u8, key_file: ?[]const u8) !*SshConnectionItem {
+        pub fn new(name: []const u8, host: []const u8, port: u16, username: []const u8, key_file: ?[]const u8) !*SshConnectionItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(SshConnectionItem, .{});
+            errdefer self.unref();
             self.name = try alloc.dupeZ(u8, name);
             errdefer alloc.free(self.name);
             self.host = try alloc.dupeZ(u8, host);
@@ -82,7 +97,6 @@ pub const SshManagerDialog = extern struct {
             errdefer alloc.free(self.username);
             if (key_file) |key| {
                 self.key_file = try alloc.dupeZ(u8, key);
-                errdefer alloc.free(self.key_file.?);
             }
             return self;
         }

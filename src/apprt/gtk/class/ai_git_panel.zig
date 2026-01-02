@@ -67,7 +67,11 @@ pub const GitPanelDialog = extern struct {
 
             fn dispose(self: *GitStatusItem) callconv(.c) void {
                 const alloc = Application.default().allocator();
-                alloc.free(self.file);
+                // Defensive check to prevent double-free on repeated dispose calls
+                if (self.file.len > 0) {
+                    alloc.free(self.file);
+                    self.file = "";
+                }
                 gobject.Object.virtual_methods.dispose.call(ItemClass.parent, self);
             }
         };
@@ -78,10 +82,11 @@ pub const GitPanelDialog = extern struct {
             .parent_class = &ItemClass.parent,
         });
 
-        pub fn new(alloc: Allocator, file: []const u8, status: GitFileStatus) !*GitStatusItem {
+        pub fn new(file: []const u8, status: GitFileStatus) !*GitStatusItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(GitStatusItem, .{});
+            errdefer self.unref();
             self.file = try alloc.dupeZ(u8, file);
-            errdefer alloc.free(self.file);
             self.status = status;
             return self;
         }
@@ -321,12 +326,23 @@ pub const GitPanelDialog = extern struct {
         log.info("Loading git status...", .{});
     }
 
-    pub fn show(self: *Self, parent: *Window) void {
-        // Git panel is typically shown as a sidebar
-        // For now, we'll present it as a window
-        if (parent.as(gtk.Window).getTransientFor()) |transient_parent| {
-            self.as(adw.NavigationView).as(gtk.Widget).setParent(transient_parent.as(gtk.Window));
-        }
-        // TODO: Implement proper presentation
+    /// Embed this NavigationView into a parent container widget.
+    /// Since GitPanelDialog is an adw.NavigationView (not a window),
+    /// it must be embedded into an existing UI hierarchy rather than presented.
+    pub fn embedInto(self: *Self, container: *gtk.Box) void {
+        container.append(self.as(adw.NavigationView).as(gtk.Widget));
+        self.as(adw.NavigationView).as(gtk.Widget).setVisible(true);
+    }
+
+    /// Show this panel by making it visible. Caller must have already
+    /// embedded this panel into a container via embedInto().
+    pub fn show(self: *Self, _: *Window) void {
+        self.as(adw.NavigationView).as(gtk.Widget).setVisible(true);
+        log.info("Git panel shown", .{});
+    }
+
+    /// Hide the panel without removing it from the container.
+    pub fn hide(self: *Self) void {
+        self.as(adw.NavigationView).as(gtk.Widget).setVisible(false);
     }
 };

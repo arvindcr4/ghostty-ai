@@ -75,12 +75,13 @@ pub const VisualBlocksDialog = extern struct {
             }
         };
 
-        pub fn new(alloc: Allocator, title: []const u8, command: []const u8, status: BlockStatus) !*BlockItem {
+        pub fn new(title: []const u8, command: []const u8, status: BlockStatus) !*BlockItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(BlockItem, .{});
+            errdefer self.unref();
             self.title = try alloc.dupeZ(u8, title);
             errdefer alloc.free(self.title);
             self.command = try alloc.dupeZ(u8, command);
-            errdefer alloc.free(self.command);
             self.status = status;
             self.timestamp = std.time.timestamp();
             return self;
@@ -110,8 +111,7 @@ pub const VisualBlocksDialog = extern struct {
 
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
-        _ = self.refSink();
-        return self.ref();
+        return self.refSink();
     }
 
     fn init(self: *Self) callconv(.c) void {
@@ -244,10 +244,9 @@ pub const VisualBlocksDialog = extern struct {
     fn addBlock(button: *gtk.Button, self: *Self) callconv(.c) void {
         _ = button;
         const priv = getPriv(self);
-        const alloc = Application.default().allocator();
 
         // TODO: Show dialog to create new block
-        const block = BlockItem.new(alloc, "New Block", "echo 'Hello World'", .pending) catch {
+        const block = BlockItem.new("New Block", "echo 'Hello World'", .pending) catch {
             log.err("Failed to create block", .{});
             return;
         };

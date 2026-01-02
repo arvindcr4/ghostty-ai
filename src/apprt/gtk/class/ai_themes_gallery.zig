@@ -57,11 +57,27 @@ pub const ThemesGalleryDialog = extern struct {
 
             fn dispose(self: *ThemeGalleryItem) callconv(.c) void {
                 const alloc = Application.default().allocator();
-                alloc.free(self.name);
-                alloc.free(self.description);
-                alloc.free(self.category);
-                alloc.free(self.preview_colors);
-                if (self.author) |auth| alloc.free(auth);
+                // Defensive checks to prevent double-free on repeated dispose calls
+                if (self.name.len > 0) {
+                    alloc.free(self.name);
+                    self.name = "";
+                }
+                if (self.description.len > 0) {
+                    alloc.free(self.description);
+                    self.description = "";
+                }
+                if (self.category.len > 0) {
+                    alloc.free(self.category);
+                    self.category = "";
+                }
+                if (self.preview_colors.len > 0) {
+                    alloc.free(self.preview_colors);
+                    self.preview_colors = "";
+                }
+                if (self.author) |auth| {
+                    alloc.free(auth);
+                    self.author = null;
+                }
                 gobject.Object.virtual_methods.dispose.call(ItemClass.parent, self);
             }
         };
@@ -72,8 +88,10 @@ pub const ThemesGalleryDialog = extern struct {
             .parent_class = &ItemClass.parent,
         });
 
-        pub fn new(alloc: Allocator, name: []const u8, description: []const u8, category: []const u8, preview_colors: []const u8) !*ThemeGalleryItem {
+        pub fn new(name: []const u8, description: []const u8, category: []const u8, preview_colors: []const u8) !*ThemeGalleryItem {
+            const alloc = Application.default().allocator();
             const self = gobject.ext.newInstance(ThemeGalleryItem, .{});
+            errdefer self.unref();
             self.name = try alloc.dupeZ(u8, name);
             errdefer alloc.free(self.name);
             self.description = try alloc.dupeZ(u8, description);
@@ -81,7 +99,6 @@ pub const ThemesGalleryDialog = extern struct {
             self.category = try alloc.dupeZ(u8, category);
             errdefer alloc.free(self.category);
             self.preview_colors = try alloc.dupeZ(u8, preview_colors);
-            errdefer alloc.free(self.preview_colors);
             return self;
         }
 
