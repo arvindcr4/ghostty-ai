@@ -84,7 +84,7 @@ def fix_test_file(filepath: Path):
         content = re.sub(pattern, r': module.\1', content)
 
     # Fix .deinit() to .deinit(alloc) for ArrayListUnmanaged
-    content = re.sub(r'\.deinit\(\)', '.deinit()', content)
+    content = re.sub(r'\.deinit\(\)', '.deinit(alloc)', content)
 
     if content != original:
         with open(filepath, 'w') as f:

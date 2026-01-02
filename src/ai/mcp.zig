@@ -850,7 +850,7 @@ pub const McpManager = struct {
 
     /// Get all available tools
     pub fn getTools(self: *const McpManager) !ArrayListUnmanaged(*const McpTool) {
-        if (!self.enabled) return error.McpDisabled;
+        if (!self.enabled) return .empty;
         return self.client.getAllTools();
     }
 

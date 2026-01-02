@@ -159,7 +159,7 @@ test "function_name - specific scenario" {{
 
 Output ONLY new test code. Do not repeat existing tests."""
 
-    for attempt in range(len(clients)):
+    for _ in range(len(clients)):
         try:
             response = get_client().chat.completions.create(
                 model="zai-glm-4.6",
@@ -171,7 +171,7 @@ Output ONLY new test code. Do not repeat existing tests."""
                 temperature=0.2,
             )
             return response.choices[0].message.content
-        except Exception as e:
+        except (ConnectionError, TimeoutError, OSError) as e:
             if "429" in str(e) or "rate" in str(e).lower():
                 rotate_client()
                 continue
@@ -198,8 +198,6 @@ def extract_zig_code(response: str) -> str:
 
 def append_tests(test_file: Path, new_tests: str):
     """Append new tests to existing test file."""
-    existing = read_existing_tests(test_file)
-
     # Add separator and new tests
     with open(test_file, "a") as f:
         f.write("\n\n// ============================================================================\n")

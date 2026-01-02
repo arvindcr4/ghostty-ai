@@ -208,6 +208,9 @@ Generate 5-10 focused, well-documented tests. Output ONLY the test code, no expl
 
 def extract_zig_tests(response: str) -> str:
     """Extract Zig test code from LLM response."""
+    # Default to full response if no code blocks found
+    code = response.strip()
+
     # Try to find code blocks
     if "```zig" in response:
         parts = response.split("```zig")
@@ -221,8 +224,6 @@ def extract_zig_tests(response: str) -> str:
             if code.startswith("zig\n"):
                 code = code[4:]
             code = code.strip()
-    else:
-        code = response.strip()
 
     # Remove duplicate imports that conflict with header
     lines = code.split('\n')
