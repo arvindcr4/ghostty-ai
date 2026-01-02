@@ -251,8 +251,7 @@ pub const AiCommandSearch = extern struct {
     /// Create a new AI command search instance
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
-        _ = self.refSink();
-        return self.ref();
+        return self.refSink();
     }
 
     fn init(self: *Self, _: *Class) callconv(.c) void {

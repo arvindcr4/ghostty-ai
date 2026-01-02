@@ -110,8 +110,7 @@ pub const CommandPalette = extern struct {
 
     pub fn new() *Self {
         const self = gobject.ext.newInstance(Self, .{});
-        _ = self.refSink();
-        return self.ref();
+        return self.refSink();
     }
 
     fn init(self: *Self) callconv(.c) void {
