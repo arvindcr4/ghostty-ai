@@ -652,6 +652,10 @@ pub const ThemeSuggestionManager = struct {
         tag_list: []const []const u8,
     ) !AISuggestedTheme {
         var tags: ArrayListUnmanaged([]const u8) = .empty;
+        errdefer {
+            for (tags.items) |t| self.alloc.free(t);
+            tags.deinit(self.alloc);
+        }
         for (tag_list) |tag| {
             try tags.append(self.alloc, try self.alloc.dupe(u8, tag));
         }
@@ -676,6 +680,7 @@ pub const ThemeSuggestionManager = struct {
     /// Analyze accessibility of a color scheme
     fn analyzeAccessibility(self: *ThemeSuggestionManager, colors: ColorScheme) AISuggestedTheme.AccessibilityInfo {
         var issues: ArrayListUnmanaged([]const u8) = .empty;
+        // Note: errdefer not needed here as function doesn't return error and uses catch {}
         const contrast = colors.foreground.contrastRatio(colors.background);
 
         // Check main contrast
@@ -871,6 +876,7 @@ pub const ThemeSuggestionManager = struct {
     /// Generate reason for suggestion
     fn generateReason(self: *ThemeSuggestionManager, theme: AISuggestedTheme, context: ThemeContext) ![]const u8 {
         var reasons: ArrayListUnmanaged(u8) = .empty;
+        errdefer reasons.deinit(self.alloc);
         const writer = reasons.writer(self.alloc);
 
         try writer.writeAll("Recommended because: ");
@@ -1006,6 +1012,7 @@ pub const ThemeSuggestionManager = struct {
         const theme = self.getThemeById(theme_id) orelse return null;
 
         var preview: ArrayListUnmanaged(u8) = .empty;
+        errdefer preview.deinit(self.alloc);
         const writer = preview.writer(self.alloc);
 
         // Generate ANSI escape sequence preview

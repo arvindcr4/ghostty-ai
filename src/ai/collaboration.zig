@@ -494,6 +494,7 @@ pub const CollaborationManager = struct {
     /// Get all team members
     pub fn getAllMembers(self: *const CollaborationManager) !ArrayListUnmanaged(*TeamMember) {
         var members: ArrayListUnmanaged(*TeamMember) = .empty;
+        errdefer members.deinit(self.alloc);
         var iter = self.members.iterator();
         while (iter.next()) |entry| {
             try members.append(self.alloc, entry.value_ptr.*);
@@ -504,6 +505,7 @@ pub const CollaborationManager = struct {
     /// Get online members
     pub fn getOnlineMembers(self: *const CollaborationManager) !ArrayListUnmanaged(*TeamMember) {
         var members: ArrayListUnmanaged(*TeamMember) = .empty;
+        errdefer members.deinit(self.alloc);
         var iter = self.members.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.*.presence == .online or entry.value_ptr.*.presence == .busy) {
@@ -706,6 +708,7 @@ pub const CollaborationManager = struct {
     /// Get all cursors in a room
     pub fn getRoomCursors(self: *const CollaborationManager, room_id: []const u8) !ArrayListUnmanaged(*SharedCursor) {
         var cursors: ArrayListUnmanaged(*SharedCursor) = .empty;
+        errdefer cursors.deinit(self.alloc);
         var iter = self.cursors.iterator();
         while (iter.next()) |entry| {
             if (std.mem.eql(u8, entry.value_ptr.*.room_id, room_id)) {
@@ -817,6 +820,7 @@ pub const CollaborationManager = struct {
         limit: usize,
     ) !ArrayListUnmanaged(*ActivityEvent) {
         var events: ArrayListUnmanaged(*ActivityEvent) = .empty;
+        errdefer events.deinit(self.alloc);
         var count: usize = 0;
 
         // Iterate backwards to get most recent
@@ -885,6 +889,7 @@ pub const CollaborationManager = struct {
     /// Serialize collaboration state to JSON
     pub fn toJson(self: *const CollaborationManager) ![]const u8 {
         var buffer: ArrayListUnmanaged(u8) = .empty;
+        errdefer buffer.deinit(self.alloc);
         const writer = buffer.writer(self.alloc);
 
         try writer.writeAll("{\"members\":[");

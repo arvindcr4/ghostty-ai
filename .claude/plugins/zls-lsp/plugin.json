@@ -4,7 +4,7 @@
   "description": "Zig Language Server integration for Claude Code",
   "lspServers": {
     "zig": {
-      "command": "/opt/homebrew/bin/zls",
+      "command": "zls",
       "args": [],
       "extensionToLanguage": {
         ".zig": "zig"

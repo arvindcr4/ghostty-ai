@@ -225,12 +225,8 @@ pub const McpServer = struct {
         try writer.print("\",\"id\":{d}", .{id});
         if (params) |p| {
             try writer.writeAll(",\"params\":");
-            // Write the params value - for now just write null for unsupported types
-            switch (p) {
-                .object => try writer.writeAll("{}"),
-                .null => try writer.writeAll("null"),
-                else => try writer.writeAll("null"),
-            }
+            // Properly serialize the params value using std.json
+            try std.json.stringify(p, .{}, writer);
         }
         try writer.writeAll("}\n");
 
@@ -748,15 +744,21 @@ fn executeCommandTool(params: json.Value, alloc: Allocator) !json.Value {
         }
     }
 
-    // Additional check for git: only allow safe subcommands
+    // Additional check for git: only allow safe read-only subcommands
     if (std.mem.eql(u8, base_command, "git") and command_str.len > 4) {
-        const git_subcommand = command_str[4..]; // Skip "git "
+        const git_args = command_str[4..]; // Skip "git "
+        // Extract just the subcommand (first word after "git ")
+        var sub_end: usize = 0;
+        while (sub_end < git_args.len and git_args[sub_end] != ' ') : (sub_end += 1) {}
+        const git_subcommand = git_args[0..sub_end];
+
+        // Only allow read-only git subcommands (exact match, not prefix)
         const safe_git_subcommands = [_][]const u8{
             "log", "diff", "status", "branch", "show", "remote", "tag", "rev-parse",
         };
         var git_allowed = false;
         for (safe_git_subcommands) |sub| {
-            if (std.mem.startsWith(u8, git_subcommand, sub)) {
+            if (std.mem.eql(u8, git_subcommand, sub)) {
                 git_allowed = true;
                 break;
             }

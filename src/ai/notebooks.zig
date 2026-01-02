@@ -281,6 +281,7 @@ pub const Notebook = struct {
     /// Export to Markdown format
     pub fn exportToMarkdown(self: *const Notebook, alloc: Allocator) ![]const u8 {
         var output: ArrayListUnmanaged(u8) = .empty;
+        errdefer output.deinit(alloc);
         const writer = output.writer(alloc);
 
         // Title and metadata
@@ -795,11 +796,15 @@ pub const NotebookManager = struct {
     /// List all available templates
     pub fn listTemplates(self: *const NotebookManager) []const []const u8 {
         var names: ArrayListUnmanaged([]const u8) = .empty;
+        errdefer names.deinit(self.alloc);
         var iter = self.templates.iterator();
         while (iter.next()) |entry| {
             names.append(self.alloc, entry.key_ptr.*) catch continue;
         }
-        return names.toOwnedSlice(self.alloc) catch &[_][]const u8{};
+        return names.toOwnedSlice(self.alloc) catch {
+            names.deinit(self.alloc);
+            return &[_][]const u8{};
+        };
     }
 
     /// Get statistics
