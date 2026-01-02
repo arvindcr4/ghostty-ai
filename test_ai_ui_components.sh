@@ -63,9 +63,9 @@ test_files_exist() {
 
     for file in "${AI_UI_FILES[@]}"; do
         if [ -f "$file" ]; then
-            pass "$(basename $file) exists"
+            pass "$(basename "$file") exists"
         else
-            fail "$(basename $file) NOT FOUND"
+            fail "$(basename "$file") NOT FOUND"
         fi
     done
     echo ""
@@ -101,13 +101,13 @@ test_errdefer_pattern() {
                 ITEM_NEW_FUNCS=$((NEW_FUNCS - REFSINK_COUNT))
 
                 if [ "$ERRDEFER_COUNT" -ge "$ITEM_NEW_FUNCS" ] 2>/dev/null && [ "$ITEM_NEW_FUNCS" -gt 0 ] 2>/dev/null; then
-                    pass "$(basename $file): errdefer coverage ($ERRDEFER_COUNT/$ITEM_NEW_FUNCS Item new functions)"
+                    pass "$(basename "$file"): errdefer coverage ($ERRDEFER_COUNT/$ITEM_NEW_FUNCS Item new functions)"
                 elif [ "$REFSINK_COUNT" -gt 0 ] && [ "$ITEM_NEW_FUNCS" -eq 0 ]; then
-                    pass "$(basename $file): Dialog-only, uses refSink pattern"
+                    pass "$(basename "$file"): Dialog-only, uses refSink pattern"
                 elif [ "$ERRDEFER_COUNT" -gt 0 ]; then
-                    pass "$(basename $file): has errdefer self.unref() ($ERRDEFER_COUNT found)"
+                    pass "$(basename "$file"): has errdefer self.unref() ($ERRDEFER_COUNT found)"
                 else
-                    warn "$(basename $file): $NEW_FUNCS new() functions but no errdefer self.unref()"
+                    warn "$(basename "$file"): $NEW_FUNCS new() functions but no errdefer self.unref()"
                 fi
             fi
         fi
@@ -129,12 +129,12 @@ test_allocator_consistency() {
             if grep -q "pub fn new(" "$file" && grep -q "alloc.dupeZ" "$file"; then
                 # Check if new() accepts allocator parameter (BAD) vs gets it internally (GOOD)
                 if grep -B5 "pub fn new(" "$file" | grep -q "alloc: Allocator"; then
-                    fail "$(basename $file): new() accepts allocator parameter (mismatch risk)"
+                    fail "$(basename "$file"): new() accepts allocator parameter (mismatch risk)"
                 else
                     if grep -A3 "pub fn new(" "$file" | grep -q "Application.default().allocator()"; then
-                        pass "$(basename $file): uses Application.default().allocator()"
+                        pass "$(basename "$file"): uses Application.default().allocator()"
                     else
-                        warn "$(basename $file): check allocator pattern manually"
+                        warn "$(basename "$file"): check allocator pattern manually"
                     fi
                 fi
             fi
@@ -155,10 +155,10 @@ test_double_reference() {
         if [ -f "$file" ]; then
             # Check for the dangerous pattern: refSink() followed by ref()
             if grep -A1 "self.refSink()" "$file" | grep -q "return self.ref()"; then
-                fail "$(basename $file): MEMORY LEAK - refSink() + ref() pattern found"
+                fail "$(basename "$file"): MEMORY LEAK - refSink() + ref() pattern found"
             else
                 if grep -q "return self.refSink();" "$file"; then
-                    pass "$(basename $file): correct refSink pattern"
+                    pass "$(basename "$file"): correct refSink pattern"
                 fi
             fi
         fi
@@ -179,13 +179,13 @@ test_dispose_defensive() {
             # Check if dispose uses defensive pattern
             if grep -q "fn dispose(" "$file"; then
                 if grep -A20 "fn dispose(" "$file" | grep -q 'if (self\.' ; then
-                    pass "$(basename $file): has defensive checks in dispose"
+                    pass "$(basename "$file"): has defensive checks in dispose"
                 else
                     # Some files may have simple dispose - check if they free strings
                     if grep -A10 "fn dispose(" "$file" | grep -q "alloc.free"; then
-                        warn "$(basename $file): dispose frees memory but check for defensive checks"
+                        warn "$(basename "$file"): dispose frees memory but check for defensive checks"
                     else
-                        pass "$(basename $file): simple dispose (no string fields)"
+                        pass "$(basename "$file"): simple dispose (no string fields)"
                     fi
                 fi
             fi
@@ -206,16 +206,16 @@ test_gobject_pattern() {
         if [ -f "$file" ]; then
             # Check for getGObjectType
             if grep -q "getGObjectType = gobject.ext.defineClass" "$file"; then
-                pass "$(basename $file): has getGObjectType"
+                pass "$(basename "$file"): has getGObjectType"
             else
-                fail "$(basename $file): missing getGObjectType"
+                fail "$(basename "$file"): missing getGObjectType"
             fi
 
             # Check for dispose implementation
             if grep -q "dispose.implement" "$file"; then
-                pass "$(basename $file): implements dispose"
+                pass "$(basename "$file"): implements dispose"
             else
-                warn "$(basename $file): no dispose implementation found"
+                warn "$(basename "$file"): no dispose implementation found"
             fi
         fi
     done
@@ -257,7 +257,7 @@ test_code_quality() {
         if [ -f "$file" ]; then
             LINES=$(wc -l < "$file")
             TOTAL_LINES=$((TOTAL_LINES + LINES))
-            info "$(basename $file): $LINES lines"
+            info "$(basename "$file"): $LINES lines"
         fi
     done
     echo ""
