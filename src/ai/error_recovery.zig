@@ -10,6 +10,7 @@ const log = std.log.scoped(.ai_error_recovery);
 
 /// Error recovery strategy
 pub const RecoveryStrategy = struct {
+    error_type: ErrorRecoveryManager.ErrorType,
     strategy_type: StrategyType,
     max_retries: u32,
     retry_delay_ms: u64,
@@ -63,6 +64,7 @@ pub const ErrorRecoveryManager = struct {
     fn registerDefaultStrategies(self: *ErrorRecoveryManager) !void {
         // Network error - retry with exponential backoff
         try self.strategies.append(.{
+            .error_type = .network_error,
             .strategy_type = .retry,
             .max_retries = 3,
             .retry_delay_ms = 1000,
@@ -71,10 +73,38 @@ pub const ErrorRecoveryManager = struct {
 
         // API error - fallback to different provider
         try self.strategies.append(.{
+            .error_type = .api_error,
             .strategy_type = .fallback,
             .max_retries = 1,
             .retry_delay_ms = 0,
             .fallback_action = try self.alloc.dupe(u8, "Switch to backup AI provider"),
+        });
+
+        // Timeout error - retry with longer delay
+        try self.strategies.append(.{
+            .error_type = .timeout_error,
+            .strategy_type = .retry,
+            .max_retries = 2,
+            .retry_delay_ms = 2000,
+            .fallback_action = null,
+        });
+
+        // Parse error - skip and continue
+        try self.strategies.append(.{
+            .error_type = .parse_error,
+            .strategy_type = .skip,
+            .max_retries = 0,
+            .retry_delay_ms = 0,
+            .fallback_action = null,
+        });
+
+        // Unknown error - abort
+        try self.strategies.append(.{
+            .error_type = .unknown_error,
+            .strategy_type = .abort,
+            .max_retries = 0,
+            .retry_delay_ms = 0,
+            .fallback_action = null,
         });
     }
 
@@ -114,9 +144,17 @@ pub const ErrorRecoveryManager = struct {
         self: *const ErrorRecoveryManager,
         error_type: ErrorType,
     ) ?RecoveryStrategy {
-        _ = error_type;
-        if (self.strategies.items.len > 0) {
-            return self.strategies.items[0];
+        // Search for strategy matching the specific error type
+        for (self.strategies.items) |strategy| {
+            if (strategy.error_type == error_type) {
+                return strategy;
+            }
+        }
+        // Fall back to unknown_error strategy if no exact match
+        for (self.strategies.items) |strategy| {
+            if (strategy.error_type == .unknown_error) {
+                return strategy;
+            }
         }
         return null;
     }

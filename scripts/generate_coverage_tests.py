@@ -162,11 +162,15 @@ Output ONLY new test code. Do not repeat existing tests."""
                 temperature=0.2,
             )
             return response.choices[0].message.content
-        except (ConnectionError, TimeoutError, OSError) as e:
-            if "429" in str(e) or "rate" in str(e).lower():
+        except Exception as e:
+            # Catch all exceptions including SDK-specific rate limit errors
+            error_str = str(e).lower()
+            if "429" in str(e) or "rate" in error_str or "quota" in error_str or "limit" in error_str:
+                print(f"Rate limited, rotating client...")
                 rotate_client()
                 continue
-            print(f"Error: {e}")
+            # Re-raise unexpected errors after logging
+            print(f"API error: {type(e).__name__}: {e}")
             return ""
     return ""
 

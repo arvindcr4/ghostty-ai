@@ -5,7 +5,10 @@ Add inline tests directly to Zig source files for 100% coverage.
 
 import os
 import re
+import shutil
+import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from cerebras.cloud.sdk import Cerebras
 
@@ -156,12 +159,62 @@ def extract_tests(response: str) -> str:
     return ""
 
 
-def append_tests_to_file(filepath: Path, tests: str):
-    """Append tests to the end of a Zig source file."""
-    with open(filepath, "a", encoding="utf-8") as f:
-        f.write("\n\n")
-        f.write(tests)
-    print(f"  Added inline tests to {filepath.name}")
+def validate_zig_syntax(code: str) -> tuple[bool, str]:
+    """Basic validation that the generated code looks like valid Zig tests."""
+    # Check for required patterns
+    if 'test "' not in code:
+        return False, "No test declarations found"
+    if "std.testing" not in code:
+        return False, "No std.testing usage found"
+
+    # Check for obviously broken syntax
+    open_braces = code.count("{")
+    close_braces = code.count("}")
+    if abs(open_braces - close_braces) > 2:
+        return False, f"Mismatched braces: {open_braces} open, {close_braces} close"
+
+    # Check for common generation artifacts that indicate bad output
+    if "```" in code:
+        return False, "Contains markdown code fence (extraction error)"
+    if code.count("test ") < 1:
+        return False, "No test blocks detected"
+
+    return True, "OK"
+
+
+def create_backup(filepath: Path) -> Path:
+    """Create a timestamped backup of the file."""
+    backup_dir = filepath.parent / ".backups"
+    backup_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = backup_dir / f"{filepath.stem}_{timestamp}{filepath.suffix}"
+    shutil.copy2(filepath, backup_path)
+    return backup_path
+
+
+def append_tests_to_file(filepath: Path, tests: str) -> bool:
+    """Append tests to the end of a Zig source file with backup and validation."""
+    # Validate before modifying
+    is_valid, reason = validate_zig_syntax(tests)
+    if not is_valid:
+        print(f"  SKIPPED: Generated tests failed validation - {reason}")
+        return False
+
+    # Create backup before modifying
+    backup_path = create_backup(filepath)
+    print(f"  Created backup: {backup_path.name}")
+
+    try:
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write("\n\n")
+            f.write(tests)
+        print(f"  Added inline tests to {filepath.name}")
+        return True
+    except Exception as e:
+        # Restore from backup on error
+        print(f"  ERROR: {e}, restoring from backup...")
+        shutil.copy2(backup_path, filepath)
+        return False
 
 
 def main():
@@ -195,8 +248,10 @@ def main():
         if response := generate_inline_tests(filename, content):
             tests = extract_tests(response)
             if tests and len(tests) > 100:
-                append_tests_to_file(filepath, tests)
-                stats["added"] += 1
+                if append_tests_to_file(filepath, tests):
+                    stats["added"] += 1
+                else:
+                    stats["skipped"] += 1
             else:
                 print("  No valid tests generated")
                 stats["skipped"] += 1
