@@ -763,6 +763,19 @@ fn executeCommandTool(params: json.Value, alloc: Allocator) !json.Value {
                 break;
             }
         }
+
+        // Block destructive flags for subcommands that support them
+        // e.g., "git branch -d", "git tag -d", "git remote remove"
+        if (git_allowed) {
+            const dangerous_flags = [_][]const u8{ "-d", "-D", "--delete", "remove", "add", "set-url", "prune" };
+            for (dangerous_flags) |flag| {
+                if (std.mem.indexOf(u8, git_args, flag) != null) {
+                    git_allowed = false;
+                    break;
+                }
+            }
+        }
+
         if (!git_allowed) {
             is_allowed = false;
         }

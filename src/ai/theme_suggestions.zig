@@ -940,22 +940,45 @@ pub const ThemeSuggestionManager = struct {
     /// Clone a theme
     fn cloneTheme(self: *ThemeSuggestionManager, theme: AISuggestedTheme) !AISuggestedTheme {
         var tags: ArrayListUnmanaged([]const u8) = .empty;
+        errdefer {
+            for (tags.items) |tag| self.alloc.free(tag);
+            tags.deinit(self.alloc);
+        }
         for (theme.tags.items) |tag| {
             try tags.append(self.alloc, try self.alloc.dupe(u8, tag));
         }
 
         var issues: ArrayListUnmanaged([]const u8) = .empty;
+        errdefer {
+            for (issues.items) |issue| self.alloc.free(issue);
+            issues.deinit(self.alloc);
+        }
         for (theme.accessibility.issues.items) |issue| {
             try issues.append(self.alloc, try self.alloc.dupe(u8, issue));
         }
 
+        const id = try self.alloc.dupe(u8, theme.id);
+        errdefer self.alloc.free(id);
+
+        const name = try self.alloc.dupe(u8, theme.name);
+        errdefer self.alloc.free(name);
+
+        const description = try self.alloc.dupe(u8, theme.description);
+        errdefer self.alloc.free(description);
+
+        const reason = try self.alloc.dupe(u8, theme.reason);
+        errdefer self.alloc.free(reason);
+
+        const preview_ansi = if (theme.preview_ansi) |p| try self.alloc.dupe(u8, p) else null;
+        // No errdefer needed - nothing can fail after this point
+
         return .{
-            .id = try self.alloc.dupe(u8, theme.id),
-            .name = try self.alloc.dupe(u8, theme.name),
-            .description = try self.alloc.dupe(u8, theme.description),
+            .id = id,
+            .name = name,
+            .description = description,
             .colors = theme.colors,
             .confidence = theme.confidence,
-            .reason = try self.alloc.dupe(u8, theme.reason),
+            .reason = reason,
             .source = theme.source,
             .tags = tags,
             .accessibility = .{
@@ -964,7 +987,7 @@ pub const ThemeSuggestionManager = struct {
                 .color_blind_safe = theme.accessibility.color_blind_safe,
                 .issues = issues,
             },
-            .preview_ansi = if (theme.preview_ansi) |p| try self.alloc.dupe(u8, p) else null,
+            .preview_ansi = preview_ansi,
             .created_at = theme.created_at,
         };
     }

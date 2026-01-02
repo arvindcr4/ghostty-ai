@@ -323,6 +323,7 @@ pub const Notebook = struct {
     /// Export to HTML format
     pub fn exportToHtml(self: *const Notebook, alloc: Allocator) ![]const u8 {
         var output: ArrayListUnmanaged(u8) = .empty;
+        errdefer output.deinit(alloc);
         const writer = output.writer(alloc);
 
         // HTML header
@@ -403,6 +404,7 @@ pub const Notebook = struct {
     /// Export to Jupyter notebook format (.ipynb)
     pub fn exportToJupyter(self: *const Notebook, alloc: Allocator) ![]const u8 {
         var output: ArrayListUnmanaged(u8) = .empty;
+        errdefer output.deinit(alloc);
         const writer = output.writer(alloc);
 
         try writer.writeAll("{\"nbformat\":4,\"nbformat_minor\":5,");
