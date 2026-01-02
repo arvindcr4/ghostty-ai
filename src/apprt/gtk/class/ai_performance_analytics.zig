@@ -208,7 +208,7 @@ pub const PerformanceAnalyticsDialog = extern struct {
 
     fn bindCommandStatsItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
         const entry = item.getItem() orelse return;
-        const stats_item = @as(*CommandStatsItem, @ptrCast(entry));
+        const stats_item = @as(*CommandStatsItem, @ptrCast(@alignCast(entry)));
         const box = item.getChild() orelse return;
         const box_widget = box.as(gtk.Box);
 

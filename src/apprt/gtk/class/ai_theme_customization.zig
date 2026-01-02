@@ -205,7 +205,7 @@ pub const ThemeCustomizationDialog = extern struct {
 
     fn bindThemeItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
         const entry = item.getItem() orelse return;
-        const theme_item = @as(*ThemeItem, @ptrCast(entry));
+        const theme_item = @as(*ThemeItem, @ptrCast(@alignCast(entry)));
         const box = item.getChild() orelse return;
         const box_widget = box.as(gtk.Box);
 

@@ -206,7 +206,7 @@ pub const QuickActionsPanel = extern struct {
 
     fn bindActionItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
         const entry = item.getItem() orelse return;
-        const action_item = @as(*ActionItem, @ptrCast(entry));
+        const action_item = @as(*ActionItem, @ptrCast(@alignCast(entry)));
         const button = item.getChild() orelse return;
         const btn_widget = button.as(gtk.Button);
 

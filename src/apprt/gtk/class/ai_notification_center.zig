@@ -229,7 +229,7 @@ pub const NotificationCenter = extern struct {
 
     fn bindNotificationItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
         const entry = item.getItem() orelse return;
-        const notif_item = @as(*NotificationItem, @ptrCast(entry));
+        const notif_item = @as(*NotificationItem, @ptrCast(@alignCast(entry)));
         const box = item.getChild() orelse return;
         const box_widget = box.as(gtk.Box);
 

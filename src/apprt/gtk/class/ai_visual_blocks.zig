@@ -206,7 +206,7 @@ pub const VisualBlocksDialog = extern struct {
 
     fn bindBlockItem(_: *gtk.SignalListItemFactory, item: *gtk.ListItem, _: ?*anyopaque) callconv(.c) void {
         const entry = item.getItem() orelse return;
-        const block_item = @as(*BlockItem, @ptrCast(entry));
+        const block_item = @as(*BlockItem, @ptrCast(@alignCast(entry)));
         const frame = item.getChild() orelse return;
         const box = frame.as(gtk.Frame).getChild() orelse return;
         const box_widget = box.as(gtk.Box);
