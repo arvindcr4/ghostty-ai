@@ -680,7 +680,6 @@ pub const ThemeSuggestionManager = struct {
     /// Analyze accessibility of a color scheme
     fn analyzeAccessibility(self: *ThemeSuggestionManager, colors: ColorScheme) AISuggestedTheme.AccessibilityInfo {
         var issues: ArrayListUnmanaged([]const u8) = .empty;
-        // Note: errdefer not needed here as function doesn't return error and uses catch {}
         const contrast = colors.foreground.contrastRatio(colors.background);
 
         // Check main contrast
@@ -694,15 +693,22 @@ pub const ThemeSuggestionManager = struct {
             .fail;
 
         if (level == .fail) {
-            issues.append(self.alloc, self.alloc.dupe(u8, "Insufficient contrast between foreground and background") catch "Low contrast") catch {};
+            // Free duplicated string if append fails to prevent memory leak
+            const dup = self.alloc.dupe(u8, "Insufficient contrast between foreground and background") catch null;
+            if (dup) |d| {
+                issues.append(self.alloc, d) catch self.alloc.free(d);
+            }
         }
 
         // Check ANSI color contrasts
         for (colors.ansi_colors, 0..) |ansi_color, i| {
             const ansi_contrast = ansi_color.contrastRatio(colors.background);
             if (ansi_contrast < 3.0) {
-                const msg = std.fmt.allocPrint(self.alloc, "ANSI color {d} has low contrast ({d:.1}:1)", .{ i, ansi_contrast }) catch "Low ANSI contrast";
-                issues.append(self.alloc, msg) catch {};
+                // Free allocated message if append fails to prevent memory leak
+                const msg = std.fmt.allocPrint(self.alloc, "ANSI color {d} has low contrast ({d:.1}:1)", .{ i, ansi_contrast }) catch null;
+                if (msg) |m| {
+                    issues.append(self.alloc, m) catch self.alloc.free(m);
+                }
             }
         }
 
