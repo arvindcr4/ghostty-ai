@@ -1079,7 +1079,7 @@ jobs:
     needs: [test, build-dist]
     steps:
       - name: Install and configure Namespace CLI
-        uses: namespacelabs/nscloud-setup@d1c625762f7c926a54bd39252efff0705fd11c64 # v0.0.10
+        uses: namespacelabs/nscloud-setup@df198f982fcecfb8264bea3f1274b56a61b6dfdc # v0.0.12
 
       - name: Configure Namespace powered Buildx
         uses: namespacelabs/nscloud-setup-buildx-action@d059ed7184f0bc7c8b27e8810cea153d02bcc6dd # v0.0.23
