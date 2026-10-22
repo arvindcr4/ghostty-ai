@@ -10,6 +10,11 @@ permissions:
 
 jobs:
   argus-review:
+    # Opt-in: this fork's GitHub-hosted runners are unavailable (account
+    # billing lock), so the job fails at startup and marks every PR red.
+    # Skip unless explicitly enabled:
+    #   gh variable set ARGUS_REVIEW_ENABLED --body true
+    if: vars.ARGUS_REVIEW_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

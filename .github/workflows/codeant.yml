@@ -12,6 +12,11 @@ on:
 jobs:
   codeant-scan:
     name: CodeAnt Security & Quality Scan
+    # Opt-in: this fork's GitHub-hosted runners are unavailable (account
+    # billing lock), and CODEANT_ACCESS_TOKEN is not configured, so the job
+    # fails at startup and marks every PR red. Skip unless explicitly enabled:
+    #   gh variable set CODEANT_SCAN_ENABLED --body true
+    if: vars.CODEANT_SCAN_ENABLED == 'true'
     runs-on: ubuntu-latest
 
     steps:
